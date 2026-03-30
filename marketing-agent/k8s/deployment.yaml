@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marketing-agent
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: marketing-agent
+    app.kubernetes.io/name: marketing-agent
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: marketing-agent
+  template:
+    metadata:
+      labels:
+        app: marketing-agent
+    spec:
+      containers:
+      - name: marketing-agent
+        image: quay.io/jonkey/marketing-agent:latest
+        ports:
+        - containerPort: 8003
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: marketing-agent-config
+        - secretRef:
+            name: marketing-agent-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /.well-known/agent.json
+            port: 8003
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /.well-known/agent.json
+            port: 8003
+          initialDelaySeconds: 5
+          periodSeconds: 5

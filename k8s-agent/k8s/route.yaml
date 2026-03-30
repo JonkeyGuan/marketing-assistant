@@ -1,0 +1,18 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: k8s-agent
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: k8s-agent
+spec:
+  to:
+    kind: Service
+    name: k8s-agent
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

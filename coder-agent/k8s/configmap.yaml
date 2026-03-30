@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coder-agent-config
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: coder-agent
+data:
+  # LLM endpoint (OpenAI-compatible)
+  MODEL_ENDPOINT: "https://your-model-endpoint/v1"
+  MODEL_NAME: "your-model-name"
+
+  # Server settings
+  SERVICE_PORT: "8001"
+
+  # Application settings
+  DEBUG: "false"
+  LOG_LEVEL: "INFO"

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marketing-assistant-config
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: marketing-assistant
+data:
+  # A2A Agent Endpoints (in-cluster service URLs)
+  CODER_A2A_URL: "http://coder-agent.0-marketing-assistant-demo.svc.cluster.local:8001"
+  CUSTOMER_A2A_URL: "http://customer-agent.0-marketing-assistant-demo.svc.cluster.local:8002"
+  MARKETING_A2A_URL: "http://marketing-agent.0-marketing-assistant-demo.svc.cluster.local:8003"
+  K8S_A2A_URL: "http://k8s-agent.0-marketing-assistant-demo.svc.cluster.local:8004"
+  
+  # Email settings
+  EMAIL_MODE: "simulate"
+  
+  # Application settings
+  DEBUG: "false"
+  LOG_LEVEL: "INFO"
+  SUPPORTED_LANGUAGES: "en,zh-CN"
+  DEFAULT_LANGUAGE: "en"

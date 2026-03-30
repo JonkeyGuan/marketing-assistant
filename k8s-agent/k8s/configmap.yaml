@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-agent-config
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: k8s-agent
+data:
+  # Cluster
+  CLUSTER_DOMAIN: "apps.your-cluster.example.com"
+  DEV_NAMESPACE: "0-marketing-assistant-demo-dev"
+  PROD_NAMESPACE: "0-marketing-assistant-demo-prod"
+
+  # Server settings
+  SERVICE_PORT: "8004"

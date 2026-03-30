@@ -1,0 +1,19 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: coder-agent
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: coder-agent
+spec:
+  host: coder-agent-0-marketing-assistant-demo.apps.cluster-qf44v.qf44v.sandbox543.opentlc.com
+  to:
+    kind: Service
+    name: coder-agent
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marketing-agent-config
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: marketing-agent
+data:
+  # LLM endpoint (OpenAI-compatible)
+  MODEL_ENDPOINT: "https://your-model-endpoint/v1"
+  MODEL_NAME: "your-model-name"
+
+  # Server settings
+  SERVICE_PORT: "8003"

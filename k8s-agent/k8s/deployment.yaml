@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-agent
+  namespace: 0-marketing-assistant-demo
+  labels:
+    app: k8s-agent
+    app.kubernetes.io/name: k8s-agent
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-agent
+  template:
+    metadata:
+      labels:
+        app: k8s-agent
+    spec:
+      serviceAccountName: marketing-assistant-sa
+      containers:
+      - name: k8s-agent
+        image: quay.io/jonkey/k8s-agent:latest
+        ports:
+        - containerPort: 8004
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: k8s-agent-config
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /.well-known/agent.json
+            port: 8004
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /.well-known/agent.json
+            port: 8004
+          initialDelaySeconds: 5
+          periodSeconds: 5

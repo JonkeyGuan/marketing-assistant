@@ -1,0 +1,20 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy dependency files first for better caching
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies (no dev, no editable install)
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy application code
+COPY app/ ./app/
+
+# Expose A2A server port
+EXPOSE 8003
+
+CMD ["uv", "run", "app"]
