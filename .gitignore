@@ -27,8 +27,8 @@ Thumbs.db
 # Logs
 *.log
 
-# Kubernetes secrets
-k8s/secret.yaml
+# Kubernetes local
+.k8s.yaml
 
 # Build artifacts
 *.tar
@@ -41,6 +41,10 @@ temp/
 # PRD and sensitive docs
 PRD-*.md
 *Draft*.md
+
+# Node.js
+node_modules/
+frontend/build/
 
 # Claude
 .claude/

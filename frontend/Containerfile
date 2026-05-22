@@ -1,0 +1,23 @@
+FROM registry.access.redhat.com/ubi9/nodejs-18-minimal:latest AS builder
+
+USER 0
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install
+COPY public/ ./public/
+COPY src/ ./src/
+COPY tsconfig.json ./
+RUN npm run build
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y nginx --nodocs && microdnf clean all && \
+    ln -sf /dev/stderr /var/log/nginx/error.log && \
+    ln -sf /dev/stdout /var/log/nginx/access.log
+COPY --from=builder /app/build /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/nginx.conf
+RUN chmod -R a+r /usr/share/nginx/html
+
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]

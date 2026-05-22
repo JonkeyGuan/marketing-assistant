@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: imagegen-mcp-config
+  labels:
+    app: imagegen-mcp
+data:
+  PORT: "8083"
+  CONFIG_SERVICE_URL: "http://config-service:8081"
+  IMAGE_STORAGE_PATH: "/data/images"
+  LOG_LEVEL: "INFO"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: imagegen-mcp-secrets
+  labels:
+    app: imagegen-mcp
+type: Opaque
+stringData:
+  MODEL_ENDPOINT: "<TODO>"
+  MODEL_NAME: "<TODO>"
+  MODEL_API_KEY: "<TODO>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: imagegen-mcp
+  labels:
+    app: imagegen-mcp
+    app.kubernetes.io/name: imagegen-mcp
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: imagegen-mcp
+  template:
+    metadata:
+      labels:
+        app: imagegen-mcp
+    spec:
+      containers:
+      - name: imagegen-mcp
+        image: quay.io/jonkey/marketing-assistant/imagegen-mcp:1.0
+        ports:
+        - containerPort: 8083
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: imagegen-mcp-config
+        - secretRef:
+            name: imagegen-mcp-secrets
+        volumeMounts:
+        - name: image-storage
+          mountPath: /data/images
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8083
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8083
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: image-storage
+        persistentVolumeClaim:
+          claimName: imagegen-mcp-images
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: imagegen-mcp-images
+  labels:
+    app: imagegen-mcp
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: imagegen-mcp
+  labels:
+    app: imagegen-mcp
+spec:
+  selector:
+    app: imagegen-mcp
+  ports:
+  - name: http
+    port: 8083
+    targetPort: 8083
+    protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Campaign Manager</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="%PUBLIC_URL%/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="%PUBLIC_URL%/favicon-192.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="%PUBLIC_URL%/favicon-192.png" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="AI-Powered Campaign Manager" />
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "tertiary-fixed-dim": "#ffb68e",
+                        "on-error": "#ffffff",
+                        "on-primary-container": "#79849a",
+                        "on-background": "#191c1e",
+                        "on-error-container": "#93000a",
+                        "error-container": "#ffdad6",
+                        "surface-container-highest": "#e0e3e5",
+                        "inverse-primary": "#bcc7de",
+                        "error": "#ba1a1a",
+                        "primary": "#000000",
+                        "on-tertiary-fixed-variant": "#763300",
+                        "secondary-container": "#d5e3fd",
+                        "on-tertiary-container": "#cf6721",
+                        "inverse-surface": "#2d3133",
+                        "on-primary": "#ffffff",
+                        "on-tertiary": "#ffffff",
+                        "surface": "#f7f9fb",
+                        "tertiary-container": "#331200",
+                        "on-tertiary-fixed": "#331200",
+                        "inverse-on-surface": "#eff1f3",
+                        "on-surface-variant": "#45464d",
+                        "primary-container": "#111c2d",
+                        "outline": "#76777d",
+                        "tertiary": "#000000",
+                        "on-surface": "#191c1e",
+                        "surface-container": "#eceef0",
+                        "background": "#f7f9fb",
+                        "surface-variant": "#e0e3e5",
+                        "secondary-fixed": "#d5e3fd",
+                        "outline-variant": "#c6c6cd",
+                        "primary-fixed-dim": "#bcc7de",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f2f4f6",
+                        "surface-dim": "#d8dadc",
+                        "primary-fixed": "#d8e3fb",
+                        "secondary": "#515f74",
+                        "on-secondary-container": "#57657b",
+                        "on-secondary-fixed": "#0d1c2f",
+                        "on-secondary": "#ffffff",
+                        "surface-bright": "#f7f9fb",
+                        "tertiary-fixed": "#ffdbca",
+                        "on-primary-fixed": "#111c2d",
+                        "secondary-fixed-dim": "#b9c7e0",
+                        "on-secondary-fixed-variant": "#3a485c",
+                        "surface-container-high": "#e6e8ea",
+                        "on-primary-fixed-variant": "#3c475a",
+                        "surface-tint": "#545f73"
+                    },
+                    fontFamily: {
+                        "headline": ["Manrope", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3, .font-headline { font-family: 'Manrope', sans-serif; }
+        .theme-card-overlay {
+            background: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.8) 100%);
+        }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .dark ::-webkit-scrollbar-thumb { background: #334155; }
+    </style>
+</head>
+<body class="bg-background text-on-surface antialiased">
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+</body>
+</html>

@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: creative-producer-config
+  labels:
+    app: creative-producer
+data:
+  PORT: "8086"
+  AGENT_ENDPOINT: "http://creative-producer:8086"
+  EVENT_HUB_URL: "http://event-hub:8080"
+  IMAGEGEN_MCP_URL: "http://imagegen-mcp:8083"
+  CONFIG_SERVICE_URL: "http://config-service:8081"
+  LOG_LEVEL: "INFO"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: creative-producer-secrets
+  labels:
+    app: creative-producer
+type: Opaque
+stringData:
+  MODEL_ENDPOINT: "<TODO>"
+  MODEL_NAME: "<TODO>"
+  MODEL_API_KEY: "<TODO>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: creative-producer
+  labels:
+    app: creative-producer
+    app.kubernetes.io/name: creative-producer
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: creative-producer
+  template:
+    metadata:
+      labels:
+        app: creative-producer
+    spec:
+      containers:
+      - name: creative-producer
+        image: quay.io/jonkey/marketing-assistant/creative-producer:1.0
+        ports:
+        - containerPort: 8086
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: creative-producer-config
+        - secretRef:
+            name: creative-producer-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8086
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8086
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: creative-producer
+  labels:
+    app: creative-producer
+spec:
+  selector:
+    app: creative-producer
+  ports:
+  - name: http
+    port: 8086
+    targetPort: 8086
+    protocol: TCP
+  type: ClusterIP

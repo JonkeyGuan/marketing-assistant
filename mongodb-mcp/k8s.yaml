@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-mcp-config
+  labels:
+    app: mongodb-mcp
+data:
+  PORT: "8082"
+  MONGODB_DATABASE: "<TODO>"
+  CONFIG_SERVICE_URL: "http://config-service:8081"
+  LOG_LEVEL: "INFO"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-mcp-secrets
+  labels:
+    app: mongodb-mcp
+type: Opaque
+stringData:
+  MONGODB_URI: "<TODO>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-mcp
+  labels:
+    app: mongodb-mcp
+    app.kubernetes.io/name: mongodb-mcp
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-mcp
+  template:
+    metadata:
+      labels:
+        app: mongodb-mcp
+    spec:
+      containers:
+      - name: mongodb-mcp
+        image: quay.io/jonkey/marketing-assistant/mongodb-mcp:1.0
+        ports:
+        - containerPort: 8082
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: mongodb-mcp-config
+        - secretRef:
+            name: mongodb-mcp-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-mcp
+  labels:
+    app: mongodb-mcp
+spec:
+  selector:
+    app: mongodb-mcp
+  ports:
+  - name: http
+    port: 8082
+    targetPort: 8082
+    protocol: TCP
+  type: ClusterIP

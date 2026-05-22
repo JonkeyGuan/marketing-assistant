@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-service-config
+  labels:
+    app: config-service
+data:
+  PORT: "8081"
+  VERTICAL_CONFIG: "hotel-casino"
+  VERTICAL_CONFIG_DIR: "/etc/vertical-config"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-service
+  labels:
+    app: config-service
+    app.kubernetes.io/name: config-service
+    app.kubernetes.io/component: config
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-service
+  template:
+    metadata:
+      labels:
+        app: config-service
+    spec:
+      containers:
+      - name: config-service
+        image: quay.io/jonkey/marketing-assistant/config-service:1.0
+        ports:
+        - containerPort: 8081
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: config-service-config
+        volumeMounts:
+        - name: vertical-config
+          mountPath: /etc/vertical-config
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: vertical-config
+        configMap:
+          name: vertical-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-service
+  labels:
+    app: config-service
+spec:
+  selector:
+    app: config-service
+  ports:
+  - name: http
+    port: 8081
+    targetPort: 8081
+    protocol: TCP
+  type: ClusterIP

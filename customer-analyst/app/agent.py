@@ -1,0 +1,274 @@
+import json
+import logging
+import httpx
+
+from app.settings import settings
+from app.config_client import prompt as vcfg_prompt, seed_data
+from app.models import CustomerProfile, GetTargetCustomersOutput
+
+logger = logging.getLogger(__name__)
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_customers_by_tier",
+            "description": "Retrieve VIP customers by membership tier (platinum, gold, diamond)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tier": {"type": "string", "description": "Membership tier: platinum, gold, or diamond"},
+                    "limit": {"type": "integer", "description": "Max customers to return", "default": 50}
+                },
+                "required": ["tier"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_prospects",
+            "description": "Retrieve prospect list — potential customers who are not yet members",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max prospects to return", "default": 50}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_high_spend_customers",
+            "description": "Retrieve customers with total spend above a threshold (whales/VVIPs)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min_spend": {"type": "integer", "description": "Minimum total spend amount", "default": 500000},
+                    "limit": {"type": "integer", "description": "Max customers to return", "default": 50}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_all_vip_customers",
+            "description": "Retrieve all VIP customers regardless of tier",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max customers to return", "default": 100}
+                }
+            }
+        }
+    },
+]
+
+SYSTEM_PROMPT = f"""{vcfg_prompt("customer_analyst_system", "You are a customer data analyst for a luxury casino resort. Given a target audience description, decide which database tool to call to retrieve the right customer segment.")} You have access to the following tools:
+
+- get_customers_by_tier: For specific tier queries (platinum, gold, diamond members)
+- get_prospects: For new/potential customers who aren't members yet
+- get_high_spend_customers: For high-spending VIP/whale customers
+- get_all_vip_customers: For broad targeting across all VIP tiers
+
+Call exactly ONE tool based on the target audience description. Do not call multiple tools."""
+
+
+def is_mock_mode() -> bool:
+    return not settings.MODEL_ENDPOINT
+
+
+async def publish_event(campaign_id: str, event_type: str, agent: str, task: str, data: dict = None):
+    if not settings.EVENT_HUB_URL:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{settings.EVENT_HUB_URL}/events/{campaign_id}/publish",
+                json={"event_type": event_type, "agent": agent, "task": task, "data": data or {}},
+                timeout=5.0
+            )
+    except Exception as e:
+        logger.warning("Failed to publish event: %s", e)
+
+
+_seed_catalog = None
+
+
+def _get_seed_catalog():
+    global _seed_catalog
+    if _seed_catalog is not None:
+        return _seed_catalog
+    _sd = seed_data()
+    _seed_catalog = (_sd.get("customers", []), _sd.get("prospects", []))
+    return _seed_catalog
+
+
+async def fake_call_mcp_tool(tool_name: str, arguments: dict) -> list:
+    customers, prospects = _get_seed_catalog()
+    limit = int(arguments.get("limit", 50))
+
+    if tool_name == "get_customers_by_tier":
+        tier = (arguments.get("tier") or "").lower()
+        return [c for c in customers if str(c.get("tier", "")).lower() == tier][:limit]
+    if tool_name == "get_prospects":
+        return prospects[:limit]
+    if tool_name == "get_high_spend_customers":
+        min_spend = int(arguments.get("min_spend", 500000))
+        return [c for c in customers if int(c.get("total_spend", 0) or 0) >= min_spend][:limit]
+    if tool_name == "get_all_vip_customers":
+        return list(customers)[:limit]
+    return []
+
+
+async def call_mcp_tool(tool_name: str, arguments: dict) -> list:
+    from fastmcp import Client
+    async with Client(f"{settings.MONGODB_MCP_URL}/mcp") as mcp_client:
+        result = await mcp_client.call_tool(tool_name, arguments)
+        if result and result.content:
+            return json.loads(result.content[0].text)
+        return []
+
+
+def _keyword_select_tool(target_audience: str, limit: int) -> tuple[str, str]:
+    audience_lower = target_audience.lower()
+    if "new" in audience_lower or "prospect" in audience_lower:
+        return "get_prospects", json.dumps({"limit": limit})
+    elif "platinum" in audience_lower:
+        return "get_customers_by_tier", json.dumps({"tier": "platinum", "limit": limit})
+    elif "diamond" in audience_lower:
+        return "get_customers_by_tier", json.dumps({"tier": "diamond", "limit": limit})
+    elif "gold" in audience_lower:
+        return "get_customers_by_tier", json.dumps({"tier": "gold", "limit": limit})
+    elif "high" in audience_lower or "spend" in audience_lower or "whale" in audience_lower:
+        return "get_high_spend_customers", json.dumps({"min_spend": 500000, "limit": limit})
+    else:
+        return "get_all_vip_customers", json.dumps({"limit": limit})
+
+
+async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "", limit: int = 50) -> tuple[list, str]:
+    if is_mock_mode():
+        tool_name, tool_args_str = _keyword_select_tool(target_audience or user_prompt, limit)
+        arguments = json.loads(tool_args_str)
+        result = await fake_call_mcp_tool(tool_name, arguments)
+        recipient_type = "prospects" if tool_name == "get_prospects" else "customers"
+        return result, recipient_type
+
+    url = f"{settings.MODEL_ENDPOINT}/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if settings.MODEL_API_KEY:
+        headers["Authorization"] = f"Bearer {settings.MODEL_API_KEY}"
+
+    payload = {
+        "model": settings.MODEL_NAME,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ],
+        "tools": TOOLS,
+        "tool_choice": "auto",
+        "temperature": 0.1,
+        "max_tokens": 256,
+        "stream": True,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    tool_call_name = None
+    tool_call_args = ""
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0), verify=False) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as response:
+            if response.status_code != 200:
+                error_text = await response.aread()
+                raise Exception(f"LLM API error: {response.status_code} - {error_text}")
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    if delta.get("tool_calls"):
+                        tc = delta["tool_calls"][0]
+                        if "function" in tc:
+                            if "name" in tc["function"]:
+                                tool_call_name = tc["function"]["name"]
+                            if "arguments" in tc["function"]:
+                                tool_call_args += tc["function"]["arguments"]
+                except json.JSONDecodeError:
+                    continue
+
+    if not tool_call_name:
+        tool_call_name, tool_call_args = _keyword_select_tool(target_audience, limit)
+
+    try:
+        arguments = json.loads(tool_call_args) if tool_call_args else {}
+    except json.JSONDecodeError:
+        arguments = {}
+    if "limit" not in arguments:
+        arguments["limit"] = limit
+
+    logger.info("LLM selected MCP tool=%s arguments=%s", tool_call_name, json.dumps(arguments, default=str))
+    result = await call_mcp_tool(tool_call_name, arguments)
+    recipient_type = "prospects" if tool_call_name == "get_prospects" else "customers"
+    return result, recipient_type
+
+
+class CustomerAnalystAgent:
+    async def get_customers(self, params: dict) -> dict:
+        user_prompt = params.get("user_prompt")
+        campaign_id = params.get("campaign_id", "unknown")
+        limit = params.get("limit", 50)
+        target_audience = params.get("target_audience", "all VIP")
+
+        await publish_event(campaign_id, "agent_started", "Customer Analyst", f"Identifying {target_audience}...")
+
+        try:
+            await publish_event(campaign_id, "workflow_status", "Customer Analyst", "Analyzing target audience...")
+
+            if user_prompt:
+                customers_data, recipient_type = await _llm_select_and_call_tool(user_prompt, limit=limit)
+            else:
+                prompt = f"Retrieve customers for this target audience: {target_audience} (limit: {limit})"
+                customers_data, recipient_type = await _llm_select_and_call_tool(prompt, target_audience, limit)
+
+            customers = [
+                CustomerProfile(
+                    customer_id=c.get("customer_id", ""),
+                    name=c.get("name", ""),
+                    name_en=c.get("name_en"),
+                    email=c.get("email", ""),
+                    tier=c.get("tier", ""),
+                    preferred_language=c.get("preferred_language", "en"),
+                    interests=c.get("interests", []),
+                    total_spend=c.get("total_spend"),
+                    last_visit=c.get("last_visit"),
+                    source=c.get("source")
+                )
+                for c in customers_data
+            ]
+
+            await publish_event(campaign_id, "agent_completed", "Customer Analyst",
+                              f"Found {len(customers)} {recipient_type}",
+                              {"count": len(customers), "recipient_type": recipient_type})
+
+            return GetTargetCustomersOutput(
+                customers=customers, count=len(customers),
+                recipient_type=recipient_type, status="success"
+            ).model_dump()
+
+        except Exception as e:
+            logger.exception("get_customers failed")
+            await publish_event(campaign_id, "agent_error", "Customer Analyst",
+                              "Could not retrieve customers", {"error": str(e)})
+            return GetTargetCustomersOutput(
+                customers=[], count=0, recipient_type="unknown",
+                status="error", error=str(e)
+            ).model_dump()

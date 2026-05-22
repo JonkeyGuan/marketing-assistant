@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HEADLINE — HOTEL_NAME</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+
+    <style id="theme-vars">
+    :root {
+        --primary: THEME_PRIMARY;
+        --secondary: THEME_SECONDARY;
+        --accent: THEME_ACCENT;
+        --bg: THEME_BG;
+        --text: THEME_TEXT;
+        --button-color: THEME_BUTTON_COLOR;
+        --button-text: THEME_BUTTON_TEXT;
+        --nav-height: 72px;
+    }
+    </style>
+
+    <style id="structural">
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Inter', system-ui, sans-serif; color: var(--text, #fff); line-height: 1.6; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+
+    h1, h2, h3, h4 { font-family: 'Manrope', system-ui, sans-serif; font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; }
+    h1 { font-size: clamp(2rem, 5vw, 3.5rem); }
+    h2 { font-size: clamp(1.8rem, 4vw, 3rem); }
+    h3 { font-size: clamp(1.1rem, 2vw, 1.4rem); }
+    p { font-size: 1.05rem; line-height: 1.7; }
+
+    nav {
+        display: flex; align-items: center; justify-content: space-between;
+        height: var(--nav-height); padding: 0 2rem;
+        position: fixed; width: 100%; top: 0; left: 0; z-index: 1000;
+        backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    }
+    nav .brand { font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 1.1rem; white-space: nowrap; display: flex; align-items: center; }
+    nav .nav-cta {
+        padding: 0.6rem 1.5rem; border: none; border-radius: 4px; cursor: pointer;
+        font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 0.85rem;
+        text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; flex-shrink: 0;
+        text-decoration: none; display: inline-flex; align-items: center;
+        background: var(--button-color); color: var(--button-text);
+    }
+
+    .hero {
+        min-height: 100vh; display: flex; flex-direction: column;
+        justify-content: center; align-items: center; text-align: center;
+        padding: calc(var(--nav-height) + 2rem) 2rem 4rem;
+        position: relative; overflow: hidden;
+    }
+    .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; z-index: 0; }
+    .hero-overlay { position: absolute; inset: 0; z-index: 1; background: rgba(0,0,0,0.5); }
+    .hero-content {
+        position: relative; z-index: 2; max-width: 900px; color: #fff !important;
+        background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        padding: 3rem 4rem; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);
+    }
+    .hero-content h1, .hero-content p, .hero-content .subtitle, .hero-content .greeting { color: #fff !important; }
+    .hero .subtitle { margin-top: 1rem; font-size: 1.2rem; opacity: 0.85; }
+    .hero .greeting { margin-top: 1.5rem; font-size: 1.15rem; }
+    .hero .badge {
+        display: inline-block !important; position: static !important;
+        padding: 0.5rem 1.4rem; border-radius: 6px;
+        font-family: 'Manrope', sans-serif; font-size: 0.8rem; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.08em; margin: 1.5rem auto 0;
+        background: rgba(255,255,255,0.15); color: var(--text);
+        border: 1px solid rgba(255,255,255,0.25);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        float: none !important; text-align: center;
+    }
+    .hero-content { text-align: center; }
+
+    .section { width: 100%; padding: 5rem 2rem; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .section-header { text-align: center !important; margin-bottom: 3rem; max-width: 800px; margin-left: auto; margin-right: auto; }
+    .section-header p { margin-top: 1rem; }
+
+    .benefits-grid {
+        display: grid !important; grid-template-columns: repeat(4, 1fr) !important;
+        gap: 1.5rem; max-width: 1200px; margin: 0 auto;
+    }
+    .card { padding: 2rem; border-radius: 12px; transition: transform 0.4s cubic-bezier(0.2, 0, 0, 1) !important; }
+    .card:hover { transform: translateY(-4px) !important; }
+    .card h3 { margin-bottom: 0.75rem; }
+    .card p { font-size: 0.95rem; }
+
+    .story .container { max-width: 800px; text-align: center; }
+    .story p { margin-top: 1.5rem; }
+
+    .dates { text-align: center; }
+    .dates .label { text-transform: uppercase; letter-spacing: 0.15em; font-size: 0.8rem; margin-bottom: 1rem; opacity: 0.6; }
+    .date-badge {
+        display: inline-block; padding: 1rem 2.5rem; border-radius: 8px;
+        font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 1.1rem;
+        letter-spacing: 0.03em;
+    }
+
+    .cta-section { text-align: center; }
+    .cta-btn {
+        display: inline-block; padding: 1.1rem 3rem; border: none; border-radius: 6px;
+        font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 1.1rem;
+        text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer;
+        text-decoration: none; transition: all 0.3s ease;
+        background: var(--button-color); color: var(--button-text);
+        box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    }
+    .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+
+    .qr-section { text-align: center; }
+    .qr-section img { border-radius: 12px; }
+    .qr-section .qr-label {
+        font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em;
+        margin-top: 1rem; opacity: 0.6;
+    }
+
+    footer { padding: 3rem 2rem; text-align: center; }
+    footer p { font-size: 0.85rem; opacity: 0.5; }
+    footer .brand { font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 1.1rem; opacity: 1; margin-bottom: 0.5rem; }
+
+    @media (max-width: 768px) {
+        nav { padding: 0 1rem; }
+        .hero { padding: calc(var(--nav-height) + 1rem) 1rem 3rem; }
+        .section { padding: 3rem 1rem; }
+        .benefits-grid { grid-template-columns: 1fr !important; }
+    }
+    </style>
+
+    LLM_STYLE_PLACEHOLDER
+
+    <style id="overflow-safety">
+    html, body { overflow-x: hidden !important; }
+    section, div { max-width: 100vw; }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="brand"><img src="data:image/png;base64,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" alt="Logo" style="width:28px;height:28px;border-radius:6px;margin-right:8px;object-fit:contain;">HOTEL_NAME</div>
+        <a href="#cta" class="nav-cta">Book Now</a>
+    </nav>
+
+    <section class="hero">
+        <div class="hero-bg" style="background-image: url('HERO_IMAGE_PLACEHOLDER');"></div>
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+            <h1>HEADLINE</h1>
+            <p class="subtitle">SUBTITLE</p>
+            <p class="greeting">{{GREETING}}</p>
+            <div class="badge">{{CUSTOMER_TIER_BADGE}}</div>
+        </div>
+    </section>
+
+    <section class="offer section">
+        <div class="container">
+            <div class="section-header">
+                <h2>An Exclusive Invitation for {{CUSTOMER_FIRST_NAME}}</h2>
+                <p>OFFER_TEXT</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="benefits section">
+        <div class="container">
+            <div class="benefits-grid">
+                <div class="card">
+                    <h3>BENEFIT_1_TITLE</h3>
+                    <p>BENEFIT_1_DESC</p>
+                </div>
+                <div class="card">
+                    <h3>BENEFIT_2_TITLE</h3>
+                    <p>BENEFIT_2_DESC</p>
+                </div>
+                <div class="card">
+                    <h3>BENEFIT_3_TITLE</h3>
+                    <p>BENEFIT_3_DESC</p>
+                </div>
+                <div class="card">
+                    <h3>BENEFIT_4_TITLE</h3>
+                    <p>BENEFIT_4_DESC</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="story section">
+        <div class="container">
+            <h2>The Experience</h2>
+            <p>STORY_TEXT</p>
+        </div>
+    </section>
+
+    <section class="dates section">
+        <div class="container">
+            <p class="label">Limited Window</p>
+            <div class="date-badge">DATE_START &mdash; DATE_END</div>
+        </div>
+    </section>
+
+    <section id="cta" class="cta-section section">
+        <div class="container">
+            <a href="#" class="cta-btn">Begin the Journey</a>
+        </div>
+    </section>
+
+    <section class="qr-section section">
+        <div class="container">
+            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=https://example.com" alt="QR Code" width="180" height="180">
+            <p class="qr-label">Scan for Mobile Access</p>
+        </div>
+    </section>
+
+    <footer>
+        <p class="brand">HOTEL_NAME</p>
+        <p>Luxury Redefined</p>
+        <p style="margin-top: 1rem;">&copy; 2026 HOTEL_NAME. All rights reserved.</p>
+    </footer>
+
+</body>
+</html>
