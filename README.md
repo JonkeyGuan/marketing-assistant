@@ -219,7 +219,7 @@ done
 | Layer | Technology |
 |---|---|
 | Frontend | React |
-| API Gateway | Flask |
+| BFF (Backend For Frontend) | Flask |
 | Orchestration | Python 3.11+, LangGraph |
 | Agent Protocol | Google A2A v1.0 (JSON-RPC 2.0) |
 | Tool Protocol | Model Context Protocol (MCP) |
