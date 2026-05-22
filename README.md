@@ -18,51 +18,62 @@ An AI-powered Marketing Campaign Assistant that accelerates campaign creation th
 
 ## Architecture
 
-```
-┌─ Presentation & BFF ────────────────────────────────────────────────────┐
-│                                                                         │
-│  Frontend (React SPA) :3000 <──SSE──> Event Hub (SSE) :8080             │
-│       |                                   |                             │
-│       | REST                              ^ publish                     │
-│       |                                   |                             │
-│  Campaign API (Flask BFF) :8089 ──A2A──> Policy Guardian :8085 -> LLM   │
-│                                                                         │
-└───────|─────────────────────────────────────────────────────────────────┘
-        | A2A v1.0
-┌─ Orchestration ─────────────────────────────────────────────────────────┐
-│                                                                         │
-│  ┌──────────────────────┐                                               │
-│  │  Campaign Director   │── publish events ──> Event Hub                │
-│  │  (LangGraph) :8088   │                                               │
-│  └──────────────────────┘                                               │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-        | A2A v1.0
-┌─ Agents ────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐             │
-│  │ Creative │  │ Customer │  │ Policy   │  │  Delivery    │             │
-│  │ Producer │  │ Analyst  │  │ Guardian │  │  Manager     │             │
-│  │  :8086   │  │  :8084   │  │  :8085   │  │   :8087      │             │
-│  └──┬───┬───┘  └──┬───┬───┘  └────┬─────┘  └──┬───┬───┬───┘             │
-│     |   |         |   |          |             |   |   |                │
-│   Code ImageGen MDB  LLM       LLM          LLM  K8s Campaign           │
-│   LLM  MCP     MCP                          API       Landing           │
-│        :8083   :8082                                                    │
-│                                                                         │
-│  All agents ── publish events ──> Event Hub                             │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Presentation & BFF
+        Frontend["Frontend<br/>(React SPA) :3000"]
+        CampaignAPI["Campaign API<br/>(Flask BFF) :8089"]
+        Frontend -->|REST| CampaignAPI
+    end
 
-┌─ Data ───────────────────────────────┐  ┌─ Infrastructure ───────────────┐
-│                                      │  │                                │
-│  MongoDB MCP :8082 -> MongoDB :27017 │  │  Config Service :8081          │
-│                                      │  │                                │
-│  ImageGen MCP :8083 -> ImageGen GPU  │  │  LLM Endpoints (vLLM/OpenAI)   │
-│                                      │  │                                │
-└──────────────────────────────────────┘  └────────────────────────────────┘
+    subgraph Event Streaming
+        EventHub["Event Hub<br/>(SSE) :8080"]
+        Frontend <-.->|SSE| EventHub
+    end
 
-Protocols:  REST    A2A v1.0 (JSON-RPC 2.0)    MCP    SSE
+    subgraph Orchestration
+        Director["Campaign Director<br/>(LangGraph) :8088"]
+    end
+
+    CampaignAPI -->|A2A| PolicyGuardian
+    CampaignAPI -->|A2A| Director
+    Director -->|publish events| EventHub
+
+    subgraph Agents
+        CreativeProducer["Creative Producer :8086"]
+        CustomerAnalyst["Customer Analyst :8084"]
+        PolicyGuardian["Policy Guardian :8085"]
+        DeliveryManager["Delivery Manager :8087"]
+    end
+
+    Director -->|A2A| CreativeProducer
+    Director -->|A2A| CustomerAnalyst
+    Director -->|A2A| PolicyGuardian
+    Director -->|A2A| DeliveryManager
+
+    subgraph MCP Servers
+        ImagegenMCP["ImageGen MCP :8083"]
+        MongoDBMCP["MongoDB MCP :8082"]
+    end
+
+    CreativeProducer -->|MCP| ImagegenMCP
+    CustomerAnalyst -->|MCP| MongoDBMCP
+
+    subgraph Infrastructure
+        ConfigService["Config Service :8081<br/><i>All services fetch vertical config at startup</i>"]
+        LLM["LLM Endpoints<br/>(vLLM / OpenAI)"]
+        MongoDB[(MongoDB :27017)]
+        CampaignLanding["Campaign Landing<br/>(Express.js)"]
+    end
+
+    ImagegenMCP --> LLM
+    CreativeProducer --> LLM
+    PolicyGuardian --> LLM
+    DeliveryManager --> LLM
+    DeliveryManager -->|K8s API| CampaignLanding
+    MongoDBMCP --> MongoDB
+
+    Agents -.->|publish events| EventHub
 ```
 
 ## Services
