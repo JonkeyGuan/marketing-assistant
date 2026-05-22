@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: campaign-director-config
+  labels:
+    app: campaign-director
+data:
+  PORT: "8088"
+  AGENT_ENDPOINT: "http://campaign-director:8088"
+  CREATIVE_PRODUCER_URL: "http://creative-producer:8086"
+  CUSTOMER_ANALYST_URL: "http://customer-analyst:8084"
+  DELIVERY_MANAGER_URL: "http://delivery-manager:8087"
+  POLICY_GUARDIAN_URL: "http://policy-guardian:8085"
+  EVENT_HUB_URL: "http://event-hub:8080"
+  CLUSTER_DOMAIN: ""
+  DEV_NAMESPACE: "marketing-dev"
+  PROD_NAMESPACE: "marketing-prod"
+  CAMPAIGN_STORAGE_PATH: "/data/campaigns"
+  CONFIG_SERVICE_URL: "http://config-service:8081"
+  LOG_LEVEL: "INFO"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: campaign-director
+  labels:
+    app: campaign-director
+    app.kubernetes.io/name: campaign-director
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: campaign-director
+  template:
+    metadata:
+      labels:
+        app: campaign-director
+    spec:
+      containers:
+      - name: campaign-director
+        image: quay.io/jonkey/marketing-assistant/campaign-director:1.0
+        ports:
+        - containerPort: 8088
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: campaign-director-config
+        volumeMounts:
+        - name: campaign-storage
+          mountPath: /data/campaigns
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8088
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8088
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: campaign-storage
+        persistentVolumeClaim:
+          claimName: campaign-director-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: campaign-director-data
+  labels:
+    app: campaign-director
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: campaign-director
+  labels:
+    app: campaign-director
+spec:
+  selector:
+    app: campaign-director
+  ports:
+  - name: http
+    port: 8088
+    targetPort: 8088
+    protocol: TCP
+  type: ClusterIP
