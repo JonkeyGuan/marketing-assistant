@@ -1,5 +1,6 @@
 import json
 import httpx
+from openai import AsyncOpenAI
 
 from app.settings import settings
 from app.config_client import prompt as vcfg_prompt
@@ -56,6 +57,16 @@ async def publish_event(campaign_id: str, event_type: str, agent: str, task: str
         print(f"[Policy Guardian] Failed to publish event: {e}")
 
 
+import httpx as _httpx
+
+_llm_client = AsyncOpenAI(
+    base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
+    api_key=settings.MODEL_API_KEY or "unused",
+    timeout=30.0,
+    http_client=_httpx.AsyncClient(verify=False),
+)
+
+
 def is_mock_mode() -> bool:
     return not settings.MODEL_ENDPOINT
 
@@ -66,32 +77,23 @@ async def validate_policy(campaign_name: str, description: str) -> dict:
         return {"approved": True, "reason": ""}
 
     prompt = POLICY_PROMPT.format(campaign_name=campaign_name, description=description)
-    headers = {"Content-Type": "application/json"}
-    if settings.MODEL_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.MODEL_API_KEY}"
-    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-        response = await client.post(
-            f"{settings.MODEL_ENDPOINT}/chat/completions",
-            headers=headers,
-            json={
-                "model": settings.MODEL_NAME,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 300,
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
+    try:
+        response = await _llm_client.chat.completions.create(
+            model=settings.MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=300,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
-        if response.status_code != 200:
-            print(f"[Policy Guardian] LLM error: {response.status_code}")
-            return {"approved": True, "reason": ""}
-
-        result = response.json()
-        answer = result["choices"][0]["message"]["content"].strip()
+        answer = response.choices[0].message.content.strip()
         if "</think>" in answer:
             answer = answer.split("</think>")[-1].strip()
         if answer.upper().startswith("REJECTED"):
             reason = answer.split(":", 1)[1].strip() if ":" in answer else "Campaign policy violation"
             return {"approved": False, "reason": reason}
+        return {"approved": True, "reason": ""}
+    except Exception as e:
+        print(f"[Policy Guardian] LLM error: {e}")
         return {"approved": True, "reason": ""}
 
 

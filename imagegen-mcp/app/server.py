@@ -3,7 +3,8 @@ import base64
 import logging
 from collections import OrderedDict
 from pathlib import Path
-import httpx
+
+from openai import AsyncOpenAI
 
 logger = logging.getLogger("imagegen_mcp")
 from fastmcp import FastMCP
@@ -58,6 +59,16 @@ def _load_image_from_disk(image_id: str) -> bytes | None:
     return None
 
 
+import httpx as _httpx
+
+_llm_client = AsyncOpenAI(
+    base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
+    api_key=settings.MODEL_API_KEY or "unused",
+    timeout=120.0,
+    http_client=_httpx.AsyncClient(verify=False),
+)
+
+
 def is_mock_mode() -> bool:
     return not settings.MODEL_ENDPOINT or not settings.MODEL_API_KEY
 
@@ -92,30 +103,13 @@ def _build_prompt(campaign_name: str, hotel_name: str, theme: str, description: 
 
 
 async def _call_imagegen_api(prompt: str, width: int = 1024, height: int = 576) -> bytes:
-    url = f"{settings.MODEL_ENDPOINT}"
-    payload = {
-        "prompt": prompt,
-        "width": width,
-        "height": height,
-    }
-    headers = {"Content-Type": "application/json"}
-    if settings.MODEL_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.MODEL_API_KEY}"
-    async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
-        response = await client.post(url, json=payload, headers=headers)
-        if response.status_code != 200:
-            raise Exception(f"Image generation API error: {response.status_code} - {response.text}")
-        data = response.json()
-        logger.info("ImageGen API response keys: %s", list(data.keys()))
-        if "artifacts" in data:
-            return base64.b64decode(data["artifacts"][0]["base64"])
-        if "b64_json" in data:
-            return base64.b64decode(data["b64_json"])
-        if "image" in data:
-            return base64.b64decode(data["image"])
-        if "data" in data:
-            return base64.b64decode(data["data"][0]["b64_json"])
-        raise Exception(f"Unexpected response format: {list(data.keys())}")
+    response = await _llm_client.images.generate(
+        model=settings.MODEL_NAME,
+        prompt=prompt,
+        size=f"{width}x{height}",
+        response_format="b64_json",
+    )
+    return base64.b64decode(response.data[0].b64_json)
 
 
 @mcp.tool

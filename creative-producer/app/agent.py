@@ -2,6 +2,7 @@ import os
 import json
 import httpx
 import traceback
+from openai import AsyncOpenAI
 
 from app.settings import settings
 from app.models import CAMPAIGN_THEMES
@@ -10,6 +11,15 @@ from app.config_client import get_config, prompt as vcfg_prompt, brand, themes a
 BASE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "base_template.html")
 
 PLACEHOLDER_IMAGE_URL = "https://placehold.co/1024x576/D4AF37/0F172A?text=Campaign+Hero+Image"
+
+import httpx as _httpx
+
+_llm_client = AsyncOpenAI(
+    base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
+    api_key=settings.MODEL_API_KEY or "unused",
+    timeout=300.0,
+    http_client=_httpx.AsyncClient(verify=False),
+)
 
 
 def is_mock_mode() -> bool:
@@ -166,42 +176,22 @@ async def publish_event(campaign_id: str, event_type: str, agent: str, task: str
 
 
 async def stream_llm(system_prompt: str, user_prompt: str) -> str:
-    url = f"{settings.MODEL_ENDPOINT}/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if settings.MODEL_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.MODEL_API_KEY}"
-    payload = {
-        "model": settings.MODEL_NAME,
-        "messages": [
+    stream = await _llm_client.chat.completions.create(
+        model=settings.MODEL_NAME,
+        messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.9,
-        "max_tokens": 8000,
-        "stream": True,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-
+        temperature=0.9,
+        max_tokens=8000,
+        stream=True,
+        stream_options={"include_usage": True},
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
     result = ""
-    async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as response:
-            if response.status_code != 200:
-                error_text = await response.aread()
-                raise Exception(f"Model API error: {response.status_code} - {error_text}")
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta = chunk["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                result += content
-                    except json.JSONDecodeError:
-                        continue
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            result += chunk.choices[0].delta.content
     return result
 
 

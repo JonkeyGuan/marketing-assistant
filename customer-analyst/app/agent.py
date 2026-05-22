@@ -1,6 +1,7 @@
 import json
 import logging
 import httpx
+from openai import AsyncOpenAI
 
 from app.settings import settings
 from app.config_client import prompt as vcfg_prompt, seed_data
@@ -74,6 +75,16 @@ SYSTEM_PROMPT = f"""{vcfg_prompt("customer_analyst_system", "You are a customer 
 - get_all_vip_customers: For broad targeting across all VIP tiers
 
 Call exactly ONE tool based on the target audience description. Do not call multiple tools."""
+
+
+import httpx as _httpx
+
+_llm_client = AsyncOpenAI(
+    base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
+    api_key=settings.MODEL_API_KEY or "unused",
+    timeout=120.0,
+    http_client=_httpx.AsyncClient(verify=False),
+)
 
 
 def is_mock_mode() -> bool:
@@ -156,54 +167,31 @@ async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "",
         recipient_type = "prospects" if tool_name == "get_prospects" else "customers"
         return result, recipient_type
 
-    url = f"{settings.MODEL_ENDPOINT}/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if settings.MODEL_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.MODEL_API_KEY}"
-
-    payload = {
-        "model": settings.MODEL_NAME,
-        "messages": [
+    stream = await _llm_client.chat.completions.create(
+        model=settings.MODEL_NAME,
+        messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ],
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "temperature": 0.1,
-        "max_tokens": 256,
-        "stream": True,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
+        tools=TOOLS,
+        tool_choice="auto",
+        temperature=0.1,
+        max_tokens=256,
+        stream=True,
+        stream_options={"include_usage": True},
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
 
     tool_call_name = None
     tool_call_args = ""
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0), verify=False) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as response:
-            if response.status_code != 200:
-                error_text = await response.aread()
-                raise Exception(f"LLM API error: {response.status_code} - {error_text}")
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                    choices = chunk.get("choices", [])
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    if delta.get("tool_calls"):
-                        tc = delta["tool_calls"][0]
-                        if "function" in tc:
-                            if "name" in tc["function"]:
-                                tool_call_name = tc["function"]["name"]
-                            if "arguments" in tc["function"]:
-                                tool_call_args += tc["function"]["arguments"]
-                except json.JSONDecodeError:
-                    continue
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.tool_calls:
+            tc = chunk.choices[0].delta.tool_calls[0]
+            if tc.function and tc.function.name:
+                tool_call_name = tc.function.name
+            if tc.function and tc.function.arguments:
+                tool_call_args += tc.function.arguments
 
     if not tool_call_name:
         tool_call_name, tool_call_args = _keyword_select_tool(target_audience, limit)

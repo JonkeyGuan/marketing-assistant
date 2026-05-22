@@ -3,6 +3,7 @@ import uuid
 import datetime
 import httpx
 from typing import List
+from openai import AsyncOpenAI
 
 from app.settings import settings
 from app.config_client import prompt as vcfg_prompt, brand
@@ -13,6 +14,16 @@ from app.models import (
     DeployProductionInput, DeployProductionOutput,
     SendEmailsInput, SendEmailsOutput,
 )
+
+import httpx as _httpx
+
+_llm_client = AsyncOpenAI(
+    base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
+    api_key=settings.MODEL_API_KEY or "unused",
+    timeout=180.0,
+    http_client=_httpx.AsyncClient(verify=False),
+)
+
 
 def is_mock_mode() -> bool:
     return not settings.MODEL_ENDPOINT
@@ -129,42 +140,22 @@ async def generate_email_with_streaming(
 
 Generate the email content now:"""
 
-    url = f"{settings.MODEL_ENDPOINT}/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if settings.MODEL_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.MODEL_API_KEY}"
-    payload = {
-        "model": settings.MODEL_NAME,
-        "messages": [
+    stream = await _llm_client.chat.completions.create(
+        model=settings.MODEL_NAME,
+        messages=[
             {"role": "system", "content": MARKETING_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.7,
-        "max_tokens": 4000,
-        "stream": True,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-
+        temperature=0.7,
+        max_tokens=4000,
+        stream=True,
+        stream_options={"include_usage": True},
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
     content = ""
-    async with httpx.AsyncClient(timeout=180.0, verify=False) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as response:
-            if response.status_code != 200:
-                error_text = await response.aread()
-                raise Exception(f"Model API error: {response.status_code} - {error_text}")
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta = chunk["choices"][0].get("delta", {})
-                            text = delta.get("content", "")
-                            if text:
-                                content += text
-                    except json.JSONDecodeError:
-                        continue
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            content += chunk.choices[0].delta.content
 
     return parse_email_response(content)
 
