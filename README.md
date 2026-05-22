@@ -40,13 +40,13 @@ An AI-powered Marketing Campaign Assistant that accelerates campaign creation th
         | A2A v1.0
 ┌─ Agents ────────────────────────────────────────────────────────────────┐
 │                                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐            │
-│  │ Creative │  │ Customer │  │ Policy   │  │  Delivery    │            │
-│  │ Producer │  │ Analyst  │  │ Guardian │  │  Manager     │            │
-│  │  :8086   │  │  :8084   │  │  :8085   │  │   :8087      │            │
-│  └──┬───┬───┘  └──┬───┬───┘  └────┬─────┘  └──┬───┬───┬───┘            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐             │
+│  │ Creative │  │ Customer │  │ Policy   │  │  Delivery    │             │
+│  │ Producer │  │ Analyst  │  │ Guardian │  │  Manager     │             │
+│  │  :8086   │  │  :8084   │  │  :8085   │  │   :8087      │             │
+│  └──┬───┬───┘  └──┬───┬───┘  └────┬─────┘  └──┬───┬───┬───┘             │
 │     |   |         |   |          |             |   |   |                │
-│   Code ImageGen MDB  LLM       LLM          LLM  K8s Campaign          │
+│   Code ImageGen MDB  LLM       LLM          LLM  K8s Campaign           │
 │   LLM  MCP     MCP                          API       Landing           │
 │        :8083   :8082                                                    │
 │                                                                         │
@@ -58,7 +58,7 @@ An AI-powered Marketing Campaign Assistant that accelerates campaign creation th
 │                                      │  │                                │
 │  MongoDB MCP :8082 -> MongoDB :27017 │  │  Config Service :8081          │
 │                                      │  │                                │
-│  ImageGen MCP :8083 -> ImageGen GPU  │  │  LLM Endpoints (vLLM/OpenAI)  │
+│  ImageGen MCP :8083 -> ImageGen GPU  │  │  LLM Endpoints (vLLM/OpenAI)   │
 │                                      │  │                                │
 └──────────────────────────────────────┘  └────────────────────────────────┘
 
