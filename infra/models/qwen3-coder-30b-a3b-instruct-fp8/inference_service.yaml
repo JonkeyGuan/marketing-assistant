@@ -9,8 +9,7 @@ metadata:
     opendatahub.io/template-display-name: vLLM NVIDIA GPU ServingRuntime for KServe
     opendatahub.io/template-name: vllm-cuda-runtime-template
     openshift.io/display-name: vLLM NVIDIA GPU ServingRuntime for KServe
-  name: qwen25-coder-32b-fp8
-  namespace: models
+  name: qwen3-coder-30b
   labels:
     opendatahub.io/dashboard: 'true'
 spec:

@@ -77,13 +77,11 @@ SYSTEM_PROMPT = f"""{vcfg_prompt("customer_analyst_system", "You are a customer 
 Call exactly ONE tool based on the target audience description. Do not call multiple tools."""
 
 
-import httpx as _httpx
-
 _llm_client = AsyncOpenAI(
     base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
     api_key=settings.MODEL_API_KEY or "unused",
     timeout=120.0,
-    http_client=_httpx.AsyncClient(verify=False),
+    http_client=httpx.AsyncClient(verify=False),
 )
 
 

@@ -173,51 +173,72 @@ def _extract_hero_image_url(html: str, imagegen_base: str) -> tuple[str, str]:
     return html, ""
 
 
-_SA_TOKEN_PATH = "/var/run/secrets/sa-token"
+_k8s_configured = False
 
 
-def _load_sa_token_fallback() -> bool:
-    """Load K8s config from a mounted SA token Secret (fallback for broken projected volumes)."""
-    import os
-    from kubernetes import client
-    token_file = os.path.join(_SA_TOKEN_PATH, "token")
-    ca_file = os.path.join(_SA_TOKEN_PATH, "ca.crt")
-    if not os.path.isfile(token_file):
-        return False
+def _load_k8s_config(force: bool = False):
+    """Load K8s config. Reloads when force=True (e.g. after token rotation)."""
+    global _k8s_configured
+    if _k8s_configured and not force:
+        return True
+    from kubernetes import config
+    _k8s_configured = False
     try:
-        with open(token_file) as f:
-            token = f.read().strip()
-        configuration = client.Configuration()
-        configuration.host = "https://kubernetes.default.svc"
-        configuration.api_key = {"authorization": f"Bearer {token}"}
-        configuration.api_key_prefix = {"authorization": ""}
-        if os.path.isfile(ca_file):
-            configuration.ssl_ca_cert = ca_file
-        else:
-            configuration.verify_ssl = False
-        client.Configuration.set_default(configuration)
-        print("[Delivery Manager] Using SA token fallback for K8s access")
+        config.load_incluster_config()
+        _k8s_configured = True
+        print("[Delivery Manager] K8s in-cluster config loaded")
         return True
     except Exception as e:
-        print(f"[Delivery Manager] SA token fallback failed: {e}")
-        return False
+        print(f"[Delivery Manager] In-cluster config failed: {e}")
+    try:
+        config.load_kube_config()
+        _k8s_configured = True
+        print("[Delivery Manager] K8s kubeconfig loaded")
+        return True
+    except Exception as e:
+        print(f"[Delivery Manager] Kubeconfig failed: {e}")
+    return False
 
 
 def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
                            customers_json: str = "[]", campaign_json: str = "{}",
                            is_preview: bool = True) -> str:
-    from kubernetes import client, config
+    import time
+    from kubernetes import client
     from kubernetes.client.rest import ApiException
 
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
+    if not _load_k8s_config():
+        print("[Delivery Manager] No K8s config available — using local URL")
+        return deploy_campaign_local(campaign_id, namespace)
+
+    for attempt in range(2):
         try:
-            config.load_kube_config()
-        except config.ConfigException:
-            if not _load_sa_token_fallback():
-                print("[Delivery Manager] No K8s config — using local URL")
-                return deploy_campaign_local(campaign_id, namespace)
+            return _do_k8s_deploy(campaign_id, html_content, namespace,
+                                  customers_json, campaign_json, is_preview)
+        except (FileNotFoundError, PermissionError) as e:
+            print(f"[Delivery Manager] Token file error (attempt {attempt+1}): {e}")
+            if attempt == 0:
+                time.sleep(2)
+                _load_k8s_config(force=True)
+            else:
+                break
+        except ApiException as e:
+            if e.status == 401 and attempt == 0:
+                print(f"[Delivery Manager] Auth failed, reloading config: {e.reason}")
+                time.sleep(2)
+                _load_k8s_config(force=True)
+            else:
+                raise
+
+    print("[Delivery Manager] K8s deploy failed after retries — using local URL")
+    return deploy_campaign_local(campaign_id, namespace)
+
+
+def _do_k8s_deploy(campaign_id: str, html_content: str, namespace: str,
+                    customers_json: str, campaign_json: str,
+                    is_preview: bool) -> str:
+    from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     imagegen_base = f"http://imagegen-mcp.{settings.APP_NAMESPACE}.svc:8083"
     html_content, hero_image_url = _extract_hero_image_url(html_content, imagegen_base)
@@ -226,6 +247,7 @@ def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
     apps_v1 = client.AppsV1Api()
     suffix = "preview" if is_preview else "live"
     deployment_name = f"campaign-{campaign_id[:8]}-{suffix}"
+    print(f"[Delivery Manager] Deploying {deployment_name} to {namespace}")
 
     data_configmap = client.V1ConfigMap(
         metadata=client.V1ObjectMeta(name=f"{deployment_name}-data"),
@@ -238,11 +260,14 @@ def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
 
     try:
         core_v1.create_namespaced_config_map(namespace=namespace, body=data_configmap)
+        print(f"[Delivery Manager] ConfigMap created")
     except ApiException as e:
         if e.status == 409:
             core_v1.replace_namespaced_config_map(
                 name=f"{deployment_name}-data", namespace=namespace, body=data_configmap)
+            print(f"[Delivery Manager] ConfigMap replaced")
         else:
+            print(f"[Delivery Manager] ConfigMap failed: {e.status} {e.reason}")
             raise
 
     deployment = client.V1Deployment(
@@ -278,10 +303,13 @@ def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
 
     try:
         apps_v1.create_namespaced_deployment(namespace=namespace, body=deployment)
+        print(f"[Delivery Manager] Deployment created")
     except ApiException as e:
         if e.status == 409:
             apps_v1.replace_namespaced_deployment(name=deployment_name, namespace=namespace, body=deployment)
+            print(f"[Delivery Manager] Deployment replaced")
         else:
+            print(f"[Delivery Manager] Deployment failed: {e.status} {e.reason}")
             raise
 
     service = client.V1Service(
@@ -294,8 +322,10 @@ def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
 
     try:
         core_v1.create_namespaced_service(namespace=namespace, body=service)
+        print(f"[Delivery Manager] Service created")
     except ApiException as e:
         if e.status != 409:
+            print(f"[Delivery Manager] Service failed: {e.status} {e.reason}")
             raise
 
     route_url = f"https://{deployment_name}-{namespace}.{settings.CLUSTER_DOMAIN}/"
@@ -326,18 +356,12 @@ def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
 
 
 def cleanup_campaign_k8s(campaign_id: str):
-    from kubernetes import client, config
+    from kubernetes import client
     from kubernetes.client.rest import ApiException
 
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        try:
-            config.load_kube_config()
-        except config.ConfigException:
-            if not _load_sa_token_fallback():
-                print(f"[Delivery Manager] No K8s config — skipping cleanup for {campaign_id}")
-                return {"status": "skipped", "reason": "no k8s config"}
+    if not _load_k8s_config():
+        print(f"[Delivery Manager] No K8s config — skipping cleanup for {campaign_id}")
+        return {"status": "skipped", "reason": "no k8s config"}
 
     core_v1 = client.CoreV1Api()
     apps_v1 = client.AppsV1Api()
@@ -417,15 +441,19 @@ class DeliveryManagerAgent:
             campaign_json = params.get("campaign_json", "{}")
 
             try:
-                preview_url = deploy_campaign_to_k8s(
-                    campaign_id=validated.campaign_id,
-                    html_content=validated.html_content,
-                    namespace=validated.namespace or settings.DEV_NAMESPACE,
-                    customers_json=customers_json,
-                    campaign_json=campaign_json,
+                import asyncio
+                loop = asyncio.get_event_loop()
+                preview_url = await loop.run_in_executor(
+                    None, deploy_campaign_to_k8s,
+                    validated.campaign_id, validated.html_content,
+                    validated.namespace or settings.DEV_NAMESPACE,
+                    customers_json, campaign_json, True,
                 )
+                print(f"[Delivery Manager] deploy_preview result: {preview_url}")
             except Exception as e:
-                print(f"[Delivery Manager] K8s preview deploy failed: {e}")
+                import traceback
+                traceback.print_exc()
+                print(f"[Delivery Manager] K8s preview deploy exception: {type(e).__name__}: {e}")
                 preview_url = deploy_campaign_local(validated.campaign_id,
                                                    validated.namespace or settings.DEV_NAMESPACE)
 
@@ -448,13 +476,13 @@ class DeliveryManagerAgent:
             campaign_json = params.get("campaign_json", "{}")
 
             try:
-                production_url = deploy_campaign_to_k8s(
-                    campaign_id=validated.campaign_id,
-                    html_content=validated.html_content,
-                    namespace=validated.namespace or settings.PROD_NAMESPACE,
-                    customers_json=customers_json,
-                    campaign_json=campaign_json,
-                    is_preview=False,
+                import asyncio
+                loop = asyncio.get_event_loop()
+                production_url = await loop.run_in_executor(
+                    None, deploy_campaign_to_k8s,
+                    validated.campaign_id, validated.html_content,
+                    validated.namespace or settings.PROD_NAMESPACE,
+                    customers_json, campaign_json, False,
                 )
             except Exception as e:
                 print(f"[Delivery Manager] K8s production deploy failed: {e}")
@@ -518,7 +546,9 @@ class DeliveryManagerAgent:
         if not campaign_id:
             return {"status": "error", "error": "campaign_id is required"}
         try:
-            result = cleanup_campaign_k8s(campaign_id)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, cleanup_campaign_k8s, campaign_id)
             return result
         except Exception as e:
             print(f"[Delivery Manager] Cleanup failed: {e}")

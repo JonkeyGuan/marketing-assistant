@@ -12,13 +12,11 @@ BASE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "base_template.html
 
 PLACEHOLDER_IMAGE_URL = "https://placehold.co/1024x576/D4AF37/0F172A?text=Campaign+Hero+Image"
 
-import httpx as _httpx
-
 _llm_client = AsyncOpenAI(
     base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
     api_key=settings.MODEL_API_KEY or "unused",
     timeout=300.0,
-    http_client=_httpx.AsyncClient(verify=False),
+    http_client=httpx.AsyncClient(verify=False),
 )
 
 
@@ -248,12 +246,71 @@ async def generate_html_with_streaming(
         return merge_template(template, theme_config, MOCK_STYLE, content,
                             hero_image_url, hotel_name, start_date, end_date)
 
+    import random
     preset_name = THEME_PRESET_NAMES.get(theme, "The Heritage Collection")
     hero_note = ""
     if hero_image_url:
         hero_note = "\nThe hero section has an AI-generated background image — make it feel cinematic with overlays and blend modes."
 
+    style_moods = [
+        "Art Deco grandeur with geometric patterns and bold symmetry",
+        "Minimalist zen with generous white space and subtle gradients",
+        "Baroque opulence with ornate borders and rich layering",
+        "Contemporary editorial with asymmetric layouts and bold typography",
+        "Tropical luxe with warm tones and organic flowing shapes",
+        "Nordic elegance with clean lines and muted sophistication",
+        "Hollywood glamour with dramatic lighting and metallic accents",
+        "Japanese wabi-sabi with textured surfaces and understated beauty",
+    ]
+
+    card_styles = [
+        "glassmorphism with frosted glass effect and subtle blur",
+        "neumorphism with soft shadows and raised surfaces",
+        "gradient borders with animated color shifts",
+        "dark glass panels with neon edge glow",
+        "textured paper with embossed lettering feel",
+        "floating cards with parallax depth shadows",
+    ]
+
+    hero_overlays = [
+        "diagonal split overlay with gradient from primary to transparent",
+        "radial vignette darkening from edges to center spotlight",
+        "cinematic letterbox with horizontal gradient bands",
+        "mesh gradient overlay blending primary and accent colors",
+        "duotone filter using primary and secondary colors",
+        "film grain texture overlay with soft color wash",
+    ]
+
+    animation_styles = [
+        "smooth fade-in with staggered delays for each section",
+        "slide-up reveal animations triggered on scroll",
+        "subtle pulse and glow effects on interactive elements",
+        "typewriter text reveal for headlines",
+        "floating particle or shimmer background effects",
+        "wave motion on borders and decorative elements",
+    ]
+
+    headline_tones = [
+        "mysterious and intriguing, like a secret invitation",
+        "bold and confident, commanding attention",
+        "warm and welcoming, like greeting an old friend",
+        "poetic and evocative, painting a sensory picture",
+        "playful and surprising, breaking luxury conventions",
+        "understated and exclusive, implying hidden privilege",
+    ]
+
+    chosen_mood = random.choice(style_moods)
+    chosen_cards = random.choice(card_styles)
+    chosen_overlay = random.choice(hero_overlays)
+    chosen_animation = random.choice(animation_styles)
+    chosen_tone = random.choice(headline_tones)
+    seed = random.randint(1000, 9999)
+
     user_prompt = f"""Design a "{preset_name}" visual experience for "{campaign_name}" at {hotel_name}.
+[variation-seed: {seed}]
+
+Creative direction: {chosen_mood}.
+Write ALL headlines and copy in a tone that is {chosen_tone}.
 
 Color palette:
 - Primary: {theme_config['primary_color']}
@@ -266,18 +323,21 @@ Color palette:
 Campaign story: {campaign_description}
 Period: {start_date} to {end_date}
 {hero_note}
-Make the benefit cards feel luxurious (glassmorphism, gradient borders, frosted glass).
-Add at least 2 @keyframes animations.
+CARD STYLE: Use {chosen_cards} for the benefit cards.
+HERO OVERLAY: Apply {chosen_overlay} on the hero section.
+ANIMATIONS: Implement {chosen_animation}. Add at least 2 @keyframes.
+
+IMPORTANT: Each generation must look distinctly different. Be creative and bold with your CSS choices.
 
 Output format — provide BOTH sections:
 
 <style>
-... your creative CSS here ...
+... your creative CSS here (be bold, make it unique!) ...
 </style>
 ---CONTENT---
-HEADLINE: (polished campaign name)
-SUBTITLE: (short tagline)
-OFFER_TEXT: (1-2 sentence exclusive offer)
+HEADLINE: (create a unique, evocative headline — NOT just the campaign name)
+SUBTITLE: (a fresh tagline that matches the {chosen_tone} tone)
+OFFER_TEXT: (1-2 sentence exclusive offer, written creatively)
 BENEFIT_1_TITLE: (short benefit name)
 BENEFIT_1_DESC: (1 sentence)
 BENEFIT_2_TITLE: (different benefit)

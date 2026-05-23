@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../auth/KeycloakProvider';
 import { useVerticalConfig } from '../../config/VerticalConfigProvider';
 
+
 interface LayoutProps {
   children: React.ReactNode;
   activeStep?: string;

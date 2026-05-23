@@ -57,13 +57,11 @@ async def publish_event(campaign_id: str, event_type: str, agent: str, task: str
         print(f"[Policy Guardian] Failed to publish event: {e}")
 
 
-import httpx as _httpx
-
 _llm_client = AsyncOpenAI(
     base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
     api_key=settings.MODEL_API_KEY or "unused",
     timeout=30.0,
-    http_client=_httpx.AsyncClient(verify=False),
+    http_client=httpx.AsyncClient(verify=False),
 )
 
 

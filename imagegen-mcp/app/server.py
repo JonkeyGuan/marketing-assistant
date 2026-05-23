@@ -4,6 +4,7 @@ import logging
 from collections import OrderedDict
 from pathlib import Path
 
+import httpx
 from openai import AsyncOpenAI
 
 logger = logging.getLogger("imagegen_mcp")
@@ -59,13 +60,11 @@ def _load_image_from_disk(image_id: str) -> bytes | None:
     return None
 
 
-import httpx as _httpx
-
 _llm_client = AsyncOpenAI(
     base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
     api_key=settings.MODEL_API_KEY or "unused",
     timeout=120.0,
-    http_client=_httpx.AsyncClient(verify=False),
+    http_client=httpx.AsyncClient(verify=False),
 )
 
 
@@ -87,16 +86,51 @@ PLACEHOLDER_PNG = base64.b64decode(
 
 
 def _build_prompt(campaign_name: str, hotel_name: str, theme: str, description: str = "") -> str:
+    import random
     theme_style = THEME_PROMPTS.get(theme, THEME_PROMPTS["luxury_gold"])
     image_context = vcfg_prompt(
         "creative_producer_image",
         "luxury casino hotel atmosphere, golden hour, Macau skyline, VIP atmosphere, architectural photography, cinematic lighting"
     )
+    angles = [
+        "aerial drone shot", "wide-angle lobby view", "intimate close-up detail",
+        "sweeping panoramic vista", "dramatic low-angle perspective",
+        "bird's-eye overhead composition", "twilight silhouette shot",
+        "reflective water surface composition",
+    ]
+    times = ["golden hour", "blue hour twilight", "midnight ambiance", "sunrise glow", "sunset warmth"]
+    subjects = [
+        "grand hotel lobby with chandeliers and marble floors",
+        "infinity pool overlooking city skyline at night",
+        "luxurious VIP lounge with velvet seating and ambient lighting",
+        "rooftop terrace with panoramic ocean views",
+        "elegant ballroom with crystal decorations",
+        "private casino suite with felt tables and golden accents",
+        "spa retreat with zen garden and water features",
+        "fine dining restaurant with candlelight and wine cellar",
+        "penthouse suite with floor-to-ceiling windows",
+        "tropical resort garden pathway with lanterns",
+    ]
+    moods = [
+        "mysterious and moody with deep shadows",
+        "bright and airy with natural light flooding in",
+        "warm and intimate with soft bokeh lights",
+        "grand and majestic with imposing architecture",
+        "serene and tranquil with minimalist composition",
+        "vibrant and energetic with rich saturated colors",
+    ]
+    chosen_angle = random.choice(angles)
+    chosen_time = random.choice(times)
+    chosen_subject = random.choice(subjects)
+    chosen_mood = random.choice(moods)
+    seed = random.randint(1000, 9999)
     return (
         f"Professional photography, {theme_style}. "
+        f"{chosen_subject}, {chosen_mood}, "
         f"{image_context}, "
-        f"cinematic lighting, photorealistic, ultra high quality, 4K resolution, "
-        f"wide banner composition. "
+        f"{chosen_angle}, {chosen_time}, "
+        f"photorealistic, ultra high quality, 4K resolution, "
+        f"wide banner composition, seed:{seed}. "
         f"ABSOLUTELY NO TEXT, NO WORDS, NO LETTERS, NO LOGOS, NO WATERMARKS, NO TYPOGRAPHY in the image. "
         f"Pure photography only, no graphic design elements."
     )

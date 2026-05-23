@@ -76,9 +76,13 @@ async def call_a2a_agent(agent_url: str, skill: str, params: dict) -> dict:
             for part in artifact.parts:
                 if part.text:
                     try:
-                        return json.loads(part.text)
+                        parsed = json.loads(part.text)
+                        print(f"[Campaign Director] A2A {skill} → {agent_url}: {parsed}")
+                        return parsed
                     except json.JSONDecodeError:
                         return {"status": "success", "content": part.text}
+
+        print(f"[Campaign Director] A2A {skill} → {agent_url}: no artifact! task_artifacts={len(last_task.artifacts) if last_task and last_task.artifacts else 0}, stream_artifacts={len(artifacts)}")
     finally:
         await client.close()
 
@@ -168,6 +172,7 @@ async def deploy_preview_node(state: CampaignState) -> CampaignState:
             "customers_json": json.dumps(state.get("customer_list", [])),
             "campaign_json": campaign_info,
         })
+        print(f"[Campaign Director] deploy_preview A2A result: {result}")
         if result.get("status") == "error":
             error_msg = result.get("error", "Unknown error")
             if "Kubernetes" in error_msg:
@@ -366,6 +371,7 @@ async def _run_landing_page_workflow(campaign_id: str, campaign):
         campaign.preview_url = final.get("preview_url", "")
         campaign.status = CampaignStatus(final.get("status", "preview_ready"))
         campaign.error_message = final.get("error_message")
+        print(f"[Campaign Director] workflow done: preview_url={campaign.preview_url!r}, status={campaign.status}")
     except Exception as e:
         traceback.print_exc()
         campaign.status = CampaignStatus.FAILED
