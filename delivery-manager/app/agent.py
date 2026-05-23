@@ -15,13 +15,11 @@ from app.models import (
     SendEmailsInput, SendEmailsOutput,
 )
 
-import httpx as _httpx
-
 _llm_client = AsyncOpenAI(
     base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
     api_key=settings.MODEL_API_KEY or "unused",
     timeout=180.0,
-    http_client=_httpx.AsyncClient(verify=False),
+    http_client=httpx.AsyncClient(verify=False),
 )
 
 
@@ -175,6 +173,36 @@ def _extract_hero_image_url(html: str, imagegen_base: str) -> tuple[str, str]:
     return html, ""
 
 
+_SA_TOKEN_PATH = "/var/run/secrets/sa-token"
+
+
+def _load_sa_token_fallback() -> bool:
+    """Load K8s config from a mounted SA token Secret (fallback for broken projected volumes)."""
+    import os
+    from kubernetes import client
+    token_file = os.path.join(_SA_TOKEN_PATH, "token")
+    ca_file = os.path.join(_SA_TOKEN_PATH, "ca.crt")
+    if not os.path.isfile(token_file):
+        return False
+    try:
+        with open(token_file) as f:
+            token = f.read().strip()
+        configuration = client.Configuration()
+        configuration.host = "https://kubernetes.default.svc"
+        configuration.api_key = {"authorization": f"Bearer {token}"}
+        configuration.api_key_prefix = {"authorization": ""}
+        if os.path.isfile(ca_file):
+            configuration.ssl_ca_cert = ca_file
+        else:
+            configuration.verify_ssl = False
+        client.Configuration.set_default(configuration)
+        print("[Delivery Manager] Using SA token fallback for K8s access")
+        return True
+    except Exception as e:
+        print(f"[Delivery Manager] SA token fallback failed: {e}")
+        return False
+
+
 def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
                            customers_json: str = "[]", campaign_json: str = "{}",
                            is_preview: bool = True) -> str:
@@ -187,8 +215,9 @@ def deploy_campaign_to_k8s(campaign_id: str, html_content: str, namespace: str,
         try:
             config.load_kube_config()
         except config.ConfigException:
-            print("[Delivery Manager] No K8s config — using local URL")
-            return deploy_campaign_local(campaign_id, namespace)
+            if not _load_sa_token_fallback():
+                print("[Delivery Manager] No K8s config — using local URL")
+                return deploy_campaign_local(campaign_id, namespace)
 
     imagegen_base = f"http://imagegen-mcp.{settings.APP_NAMESPACE}.svc:8083"
     html_content, hero_image_url = _extract_hero_image_url(html_content, imagegen_base)
@@ -306,8 +335,9 @@ def cleanup_campaign_k8s(campaign_id: str):
         try:
             config.load_kube_config()
         except config.ConfigException:
-            print(f"[Delivery Manager] No K8s config — skipping cleanup for {campaign_id}")
-            return {"status": "skipped", "reason": "no k8s config"}
+            if not _load_sa_token_fallback():
+                print(f"[Delivery Manager] No K8s config — skipping cleanup for {campaign_id}")
+                return {"status": "skipped", "reason": "no k8s config"}
 
     core_v1 = client.CoreV1Api()
     apps_v1 = client.AppsV1Api()
