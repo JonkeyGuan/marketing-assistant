@@ -23,9 +23,9 @@ echo "Namespace:      $NAMESPACE"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Phase 0: Pre-flight — adopt existing namespaces, OVN, SPIRE SCC
+# Phase 0: Pre-flight — adopt existing namespaces, OVN
 # ---------------------------------------------------------------------------
-echo "[0/5] Pre-flight checks..."
+echo "[0/9] Pre-flight checks..."
 
 echo "  Labeling namespaces for Helm adoption..."
 for ns in istio-system gateway-system; do
@@ -52,7 +52,7 @@ fi
 # ---------------------------------------------------------------------------
 # Phase 1: Install kagenti-deps (Keycloak, MLflow, Istio, OTEL, SPIRE)
 # ---------------------------------------------------------------------------
-echo "[1/5] Installing kagenti-deps..."
+echo "[1/9] Installing kagenti-deps..."
 
 if helm status kagenti-deps -n "$NAMESPACE" &>/dev/null; then
   echo "  kagenti-deps already installed, upgrading..."
@@ -79,9 +79,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 2: Wait for operators and CRDs
+# Phase 2: Wait for operators and CRDs, SPIRE SCC
 # ---------------------------------------------------------------------------
-echo "[2/5] Waiting for operators..."
+echo "[2/9] Waiting for operators..."
 
 echo "  Waiting for cert-manager..."
 oc wait --for=condition=Available deployment -l app.kubernetes.io/name=cert-manager \
@@ -110,17 +110,16 @@ oc wait --for=condition=Ready pod -l app=postgres-kc \
   -n "$KC_NAMESPACE" --timeout=300s 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Phase 2b: SPIRE SCC fix (OpenShift requires privileged SCC)
-# ---------------------------------------------------------------------------
+# SPIRE SCC fix (OpenShift requires privileged SCC)
 echo "  Granting SPIRE privileged SCC..."
 SPIRE_NS="zero-trust-workload-identity-manager"
 oc adm policy add-scc-to-user privileged -z spire-agent -n "$SPIRE_NS" 2>/dev/null || true
 oc adm policy add-scc-to-user privileged -z spire-spiffe-csi-driver -n "$SPIRE_NS" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Phase 3: Apply hook resources (operand CRs — Keycloak CR, Istio CR, etc.)
+# Phase 3: Apply deps hook resources (operand CRs — Keycloak CR, Istio CR, etc.)
 # ---------------------------------------------------------------------------
-echo "[3/5] Applying operand CRs..."
+echo "[3/9] Applying deps operand CRs..."
 
 HOOKS_RAW=$(helm get hooks kagenti-deps -n "$NAMESPACE" 2>/dev/null || true)
 if [ -n "$HOOKS_RAW" ]; then
@@ -144,7 +143,7 @@ oc wait --for=condition=Ready pod -l app=keycloak \
   echo "  WARNING: Keycloak pods not ready yet, continuing..."
 
 # ---------------------------------------------------------------------------
-# Phase 3a: Sync Istio CA (pre-existing OSSM CA takes precedence)
+# Sync Istio CA (pre-existing OSSM CA takes precedence)
 # ---------------------------------------------------------------------------
 # When OSSM (openshift-gateway Istio) is already installed, it owns the
 # istio-ca-root-cert configmap. Kagenti's istiod in istio-system must use the
@@ -187,9 +186,9 @@ for doc in yaml.safe_load_all(sys.stdin):
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 3b: Install MCP Gateway (optional — skip if chart/image mismatch)
+# Phase 4: Install MCP Gateway
 # ---------------------------------------------------------------------------
-echo "  Installing MCP Gateway..."
+echo "[4/9] Installing MCP Gateway..."
 if helm status mcp-gateway -n "$MCP_NAMESPACE" &>/dev/null; then
   helm upgrade mcp-gateway oci://ghcr.io/kagenti/charts/mcp-gateway \
     --version "$MCP_GW_VERSION" \
@@ -206,9 +205,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4: Install kagenti platform
+# Phase 5: Install kagenti platform
 # ---------------------------------------------------------------------------
-echo "[4/5] Installing kagenti platform..."
+echo "[5/9] Installing kagenti platform..."
 
 if helm status kagenti -n "$NAMESPACE" &>/dev/null; then
   echo "  kagenti already installed, upgrading..."
@@ -237,9 +236,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4b: Apply kagenti chart hooks (skipped by --no-hooks)
+# Phase 6: Apply kagenti chart hooks (skipped by --no-hooks)
 # ---------------------------------------------------------------------------
-echo "  Applying kagenti hook resources..."
+echo "[6/9] Applying kagenti hook resources..."
 KAGENTI_HOOKS=$(helm get hooks kagenti -n "$NAMESPACE" 2>/dev/null || true)
 if [ -n "$KAGENTI_HOOKS" ]; then
   echo "$KAGENTI_HOOKS" | python3 -c "
@@ -279,8 +278,9 @@ if ! oc get configmap kagenti-ui-config -n "$NAMESPACE" &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4c: Post-install fixups
+# Phase 7: Post-install fixups
 # ---------------------------------------------------------------------------
+echo "[7/9] Applying post-install fixups..."
 
 # Fix Kiali URL in kagenti-ui-config (route processor doesn't know about Kiali)
 echo "  Patching Kiali URL in UI config..."
@@ -337,9 +337,9 @@ if [ -n "$KC_ROUTE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4d: Clean up Keycloak users — keep only admin, create kagenti-admin secret
+# Phase 8: Clean up Keycloak users — keep only admin, create keycloak-admin secret
 # ---------------------------------------------------------------------------
-echo "  Cleaning up Keycloak realm users..."
+echo "[8/9] Cleaning up Keycloak realm users..."
 KC_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
 KC_BOOTSTRAP_USER=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
 KC_BOOTSTRAP_PASS=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
@@ -434,9 +434,9 @@ if [ -n "$KC_ROUTE" ] && [ -n "$KC_BOOTSTRAP_USER" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 5: Verify
+# Phase 9: Verify
 # ---------------------------------------------------------------------------
-echo "[5/5] Verifying installation..."
+echo "[9/9] Verifying installation..."
 echo ""
 echo "Pods in $NAMESPACE:"
 oc get pods -n "$NAMESPACE" --no-headers 2>/dev/null | head -20

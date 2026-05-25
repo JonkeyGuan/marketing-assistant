@@ -50,14 +50,14 @@ DOMAIN=apps.cluster-xxx.sandbox.opentlc.com ./install.sh
 |-------|-------------|
 | **0 — Pre-flight** | Adopt existing istio-system/gateway-system namespaces for Helm, enable OVN `routingViaHost` for Istio Ambient |
 | **1 — kagenti-deps** | Install Helm chart with `--no-hooks` (Keycloak, MLflow, Istio, OTEL, SPIRE, Kiali, cert-manager) |
-| **2 — Wait** | Wait for operators (cert-manager, RHBK, Keycloak CRD, PostgreSQL), grant SPIRE privileged SCC |
-| **3 — Hooks** | Apply operand CRs (Keycloak CR, Istio CR, Kiali CR) via Python YAML parser, sync Istio CA for OSSM coexistence |
-| **3b — MCP Gateway** | Install MCP Gateway Helm chart with pinned image tag |
-| **4 — kagenti** | Install kagenti Helm chart with `--no-hooks`, set SPIFFE prefix and OAuth config |
-| **4b — Hooks** | Apply kagenti hook resources, create `kagenti-ui-config` ConfigMap with route URLs |
-| **4c — Fixups** | Patch Kiali URL, MLflow OIDC/probes/PVC, AuthBridge config (replace `localtest.me` defaults) |
-| **4d — Users** | Create unified `admin` user in master + kagenti realms, delete test users, create `keycloak-admin` secret |
-| **5 — Verify** | Print pod status and route URLs |
+| **2 — Wait & SCC** | Wait for operators (cert-manager, RHBK, Keycloak CRD, PostgreSQL), grant SPIRE privileged SCC |
+| **3 — Deps hooks** | Apply operand CRs (Keycloak CR, Istio CR, Kiali CR) via Python YAML parser, sync Istio CA for OSSM coexistence |
+| **4 — MCP Gateway** | Install MCP Gateway Helm chart with pinned image tag |
+| **5 — kagenti** | Install kagenti Helm chart with `--no-hooks`, set SPIFFE prefix and OAuth config |
+| **6 — kagenti hooks** | Apply kagenti hook resources, create `kagenti-ui-config` ConfigMap with route URLs |
+| **7 — Fixups** | Patch Kiali URL, MLflow OIDC/probes/PVC, AuthBridge config (replace `localtest.me` defaults) |
+| **8 — Users** | Create unified `admin` user in master + kagenti realms, delete test users, create `keycloak-admin` secret |
+| **9 — Verify** | Print pod status and route URLs |
 
 ## Uninstall
 
