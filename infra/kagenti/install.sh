@@ -336,6 +336,28 @@ if [ -n "$KC_ROUTE" ]; then
     2>/dev/null || true
 fi
 
+# Fix kagenti-manager-role: add list/watch for serviceaccounts (chart only ships create/get/update)
+echo "  Patching kagenti-manager-role (serviceaccounts list/watch)..."
+oc get clusterrole kagenti-manager-role -o json 2>/dev/null | python3 -c "
+import sys, json
+role = json.load(sys.stdin)
+for rule in role.get('rules', []):
+    if 'serviceaccounts' in rule.get('resources', []):
+        verbs = set(rule.get('verbs', []))
+        verbs.update(['list', 'watch'])
+        rule['verbs'] = sorted(verbs)
+del role['metadata']['resourceVersion']
+del role['metadata']['uid']
+del role['metadata']['creationTimestamp']
+role['metadata'].pop('managedFields', None)
+json.dump(role, sys.stdout)
+" | oc apply -f - 2>/dev/null || true
+
+# Restart controller-manager to pick up new RBAC
+oc rollout restart deployment/kagenti-controller-manager -n "$NAMESPACE" 2>/dev/null || true
+oc wait --for=condition=Available deployment/kagenti-controller-manager \
+  -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Phase 8: Clean up Keycloak users — keep only admin, create keycloak-admin secret
 # ---------------------------------------------------------------------------
