@@ -1,0 +1,80 @@
+# kagenti platform Helm chart overrides
+# Reference: https://github.com/kagenti/kagenti/blob/main/charts/kagenti/values.yaml
+#
+# Usage:
+#   helm install kagenti oci://ghcr.io/kagenti/kagenti/kagenti \
+#     -n kagenti-system \
+#     -f values-kagenti.yaml \
+#     --set "domain=$DOMAIN"
+
+openshift: true
+
+# Override at install time: --set domain=apps.cluster-xxx.sandbox.opentlc.com
+domain: ""
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  agentNamespaces:
+    enabled: true
+  agentOperator:
+    enabled: true
+  mcpGateway:
+    enabled: true
+  ui:
+    enabled: true
+  mlflow:
+    enabled: true
+  istio:
+    enabled: true
+  phoenix:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Agent namespaces — create these namespaces for agent workloads
+# ---------------------------------------------------------------------------
+agentNamespaces:
+  - kagenti-agents
+
+# ---------------------------------------------------------------------------
+# Keycloak
+# ---------------------------------------------------------------------------
+keycloak:
+  enabled: true
+  namespace: keycloak
+  realm: kagenti
+  autoBootstrapRealm: true
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+ui:
+  auth:
+    enabled: true
+  backend:
+    defaultRegistryUrl: "image-registry.openshift-image-registry.svc:5000"
+    shipwrightDefaultStrategy: "buildah"
+
+# ---------------------------------------------------------------------------
+# MLflow
+# ---------------------------------------------------------------------------
+mlflow:
+  auth:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Agent OAuth — SPIFFE prefix set at install time via --set
+# ---------------------------------------------------------------------------
+agentOAuthSecret:
+  spiffePrefix: ""
+  useServiceAccountCA: false
+
+uiOAuthSecret:
+  useServiceAccountCA: false
+
+# ---------------------------------------------------------------------------
+# Secrets — override at install time via --set or a separate secret values file
+# ---------------------------------------------------------------------------
+secrets:
+  openaiApiKey: ""

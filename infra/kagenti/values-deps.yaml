@@ -1,0 +1,85 @@
+# kagenti-deps Helm chart overrides
+# Reference: https://github.com/kagenti/kagenti/blob/main/charts/kagenti-deps/values.yaml
+#
+# Usage:
+#   helm install kagenti-deps oci://ghcr.io/kagenti/kagenti/kagenti-deps \
+#     -n kagenti-system --create-namespace \
+#     -f values-deps.yaml \
+#     --set "domain=$DOMAIN" \
+#     --set "keycloak.publicUrl=https://keycloak.$DOMAIN" \
+#     --no-hooks
+
+openshift: true
+
+# Override at install time: --set domain=apps.cluster-xxx.sandbox.opentlc.com
+domain: ""
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  keycloak:
+    enabled: true
+  mlflow:
+    enabled: true
+  istio:
+    enabled: true
+  otel:
+    enabled: true
+  spire:
+    enabled: true
+  certManager:
+    enabled: true
+  # Not needed for this project
+  mcpInspector:
+    enabled: false
+  kiali:
+    enabled: true
+  phoenix:
+    enabled: false
+  containerRegistry:
+    enabled: false
+  tekton:
+    enabled: false
+  shipwright:
+    enabled: false
+  rhoai:
+    enabled: false
+  ingressGateway:
+    enabled: false
+  metricsServer:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Keycloak
+# ---------------------------------------------------------------------------
+keycloak:
+  namespace: keycloak
+  auth:
+    adminUser: keycloakadmin
+    adminPassword: changeme
+  realm: kagenti
+  database:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# MLflow
+# ---------------------------------------------------------------------------
+mlflow:
+  namespace: kagenti-system
+  auth:
+    enabled: true
+    secretName: mlflow-oauth-secret
+
+# ---------------------------------------------------------------------------
+# SPIRE — trust domain set at install time via --set spire.trustDomain=$DOMAIN
+# ---------------------------------------------------------------------------
+spire:
+  trustDomain: ""
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry — enable MLflow trace export
+# ---------------------------------------------------------------------------
+otel:
+  mlflow:
+    enabled: false
