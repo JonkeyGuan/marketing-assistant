@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     POLICY_GUARDIAN_URL: str = "http://localhost:8085"
     EVENT_HUB_URL: str = "http://localhost:8080"
     CONFIG_SERVICE_URL: str = "http://localhost:8081"
+    HAP_DETECTOR_URL: str = ""
+    PROMPT_INJECTION_URL: str = ""
+    ORCHESTRATOR_URL: str = ""
     LOG_LEVEL: str = "INFO"
 
     class Config:

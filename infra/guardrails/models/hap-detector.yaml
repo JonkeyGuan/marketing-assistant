@@ -1,0 +1,95 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: guardrails-detector-ibm-hap
+  labels:
+    app.kubernetes.io/component: guardrails
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: guardrails-detector-runtime-hap
+  labels:
+    opendatahub.io/dashboard: 'true'
+spec:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8080'
+  containers:
+    - command: ["sh", "-c"]
+      args:
+        - |
+          if [ ! -f "$MODEL_DIR/config.json" ]; then
+            echo "[init] Model not found at $MODEL_DIR, downloading $HF_MODEL_ID ..."
+            pip install --no-cache-dir --target /tmp/hf_lib -q 'huggingface_hub>=0.34,<1.0'
+            PYTHONPATH=/tmp/hf_lib python3 -c "
+          import os, shutil
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(os.environ['HF_MODEL_ID'], cache_dir='/tmp/hf_cache')
+          dst = os.environ['MODEL_DIR']
+          for item in os.listdir(path):
+              s, d = os.path.join(path, item), os.path.join(dst, item)
+              if os.path.isdir(s):
+                  shutil.copytree(s, d, dirs_exist_ok=True)
+              else:
+                  shutil.copy(s, d)
+          "
+            echo "[init] Download complete."
+          fi
+          exec uvicorn app:app --workers 4 --host 0.0.0.0 --port 8000 --log-config /common/log_conf.yaml
+      env:
+        - name: MODEL_DIR
+          value: /mnt/models
+        - name: HF_HOME
+          value: /tmp/hf_home
+        - name: HF_MODEL_ID
+          value: ibm-granite/granite-guardian-hap-125m
+      image: quay.io/trustyai/guardrails-detector-huggingface-runtime:latest
+      name: kserve-container
+      ports:
+        - containerPort: 8000
+          protocol: TCP
+  multiModel: false
+  supportedModelFormats:
+    - autoSelect: true
+      name: guardrails-detector-huggingface
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  annotations:
+    openshift.io/display-name: guardrails-detector-ibm-hap
+    serving.kserve.io/deploymentMode: RawDeployment
+  name: guardrails-detector-ibm-hap
+  labels:
+    opendatahub.io/dashboard: 'true'
+spec:
+  predictor:
+    automountServiceAccountToken: false
+    deploymentStrategy:
+      type: Recreate
+    maxReplicas: 1
+    minReplicas: 1
+    model:
+      modelFormat:
+        name: guardrails-detector-huggingface
+      name: ''
+      resources:
+        limits:
+          cpu: '2'
+          memory: 8Gi
+        requests:
+          cpu: '1'
+          memory: 4Gi
+      runtime: guardrails-detector-runtime-hap
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: guardrails-detector-ibm-hap

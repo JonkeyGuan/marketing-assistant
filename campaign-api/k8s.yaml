@@ -10,6 +10,9 @@ data:
   POLICY_GUARDIAN_URL: "http://policy-guardian:8085"
   EVENT_HUB_URL: "http://event-hub:8080"
   CONFIG_SERVICE_URL: "http://config-service:8081"
+  HAP_DETECTOR_URL: "http://guardrails-detector-ibm-hap-predictor.models.svc.cluster.local:8000"
+  PROMPT_INJECTION_URL: "http://prompt-injection-detector-predictor.models.svc.cluster.local:8000"
+  ORCHESTRATOR_URL: ""
   LOG_LEVEL: "INFO"
 ---
 apiVersion: apps/v1

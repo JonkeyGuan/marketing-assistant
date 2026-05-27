@@ -1,0 +1,14 @@
+---
+apiVersion: trustyai.opendatahub.io/v1alpha1
+kind: GuardrailsOrchestrator
+metadata:
+  name: guardrails-orchestrator
+  finalizers:
+    - trustyai.opendatahub.io/gorch-finalizer
+spec:
+  enableBuiltInDetectors: true
+  enableGuardrailsGateway: false
+  orchestratorConfig: fms-orchestr8-config-nlp
+  otelExporter:
+    otlpProtocol: grpc
+  replicas: 1

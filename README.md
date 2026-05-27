@@ -9,6 +9,7 @@ An AI-powered Marketing Campaign Assistant that accelerates campaign creation th
 - Create marketing campaigns through a guided wizard UI
 - Generate landing pages with AI (HTML/CSS/JS)
 - AI-powered policy review and brand compliance guardrails
+- 4-layer content safety: regex competitor filter, HAP detection, prompt injection detection, LLM policy review
 - Generate and send bilingual marketing emails (English / 中文)
 - Retrieve customer profiles for personalized targeting
 - Real-time progress tracking via Server-Sent Events
@@ -58,6 +59,14 @@ graph TB
 
     CreativeProducer -->|MCP| ImagegenMCP
     CustomerAnalyst -->|MCP| MongoDBMCP
+
+    subgraph "TrustyAI Guardrails (optional)"
+        HAPDetector["HAP Detector<br/>(granite-guardian-hap-125m)"]
+        PIDetector["Prompt Injection Detector<br/>(deberta-v3-prompt-injection)"]
+    end
+
+    CampaignAPI -->|REST| HAPDetector
+    CampaignAPI -->|REST| PIDetector
 
     subgraph Infrastructure
         ConfigService["Config Service :8081<br/><i>All services fetch vertical config at startup</i>"]
@@ -110,6 +119,9 @@ marketing-assistant/
 ├── config-service/         # Vertical configuration REST API
 ├── campaign-landing/       # Landing page server
 ├── mongodb/                # MongoDB: local run/stop scripts + k8s manifests
+├── infra/
+│   ├── kagenti/            # Kagenti platform install/uninstall
+│   └── guardrails/         # TrustyAI guardrails (HAP, prompt injection, orchestrator)
 ├── run.sh                  # Start all services locally
 └── stop.sh                 # Stop all services
 ```
@@ -223,9 +235,11 @@ Traces are visible in the kagenti MLflow UI under the `marketing-assistant` expe
 ### Prerequisites
 
 1. Logged in to OpenShift (`oc login`)
-2. [Kagenti platform](infra/kagenti/) installed (`infra/kagenti/install.sh`)
-3. Container images built and pushed (each service has `build.sh`)
-4. Secrets configured: copy `k8s.yaml` to `.k8s.yaml` per service and fill in `MODEL_ENDPOINT`, `MODEL_API_KEY`, `MONGODB_URI`, `CLUSTER_DOMAIN` etc.
+2. [LLM models](infra/models/) deployed manually to the `models` namespace (Qwen3-32B, Qwen3-Coder-30B, Flux2-Klein-4B)
+3. [Kagenti platform](infra/kagenti/) installed (`infra/kagenti/install.sh`)
+4. [TrustyAI Guardrails](infra/guardrails/) installed (optional, `infra/guardrails/install.sh`)
+5. Container images built and pushed (each service has `build.sh`)
+6. Secrets configured: copy `k8s.yaml` to `.k8s.yaml` per service and fill in `MODEL_ENDPOINT`, `MODEL_API_KEY`, `MONGODB_URI`, `CLUSTER_DOMAIN` etc.
 
 ### Deploy
 
@@ -247,6 +261,28 @@ This script handles:
 ```
 
 Removes all application resources, Keycloak client/users/roles, and the namespace.
+
+### TrustyAI Guardrails (Optional)
+
+TrustyAI Guardrails is optional because it requires **Red Hat OpenShift AI 3.3+** with the TrustyAI component enabled (`trustyai.managementState: Managed` in DataScienceCluster CR). Without RHOAI, the GuardrailsOrchestrator CRD is unavailable and the detector InferenceServices cannot be deployed. campaign-api is designed for graceful degradation — when detector URLs are empty, the corresponding guardrail layers are skipped and the system operates with regex + Policy Guardian only.
+
+```bash
+# Install (default namespace: models)
+infra/guardrails/install.sh
+
+# Uninstall
+infra/guardrails/uninstall.sh
+```
+
+campaign-api connects to the detectors via environment variables in `k8s.yaml`:
+
+| Env Var | Purpose | Default |
+|---|---|---|
+| `HAP_DETECTOR_URL` | Hate/abuse/profanity detection | `""` (skip) |
+| `PROMPT_INJECTION_URL` | Prompt injection detection | `""` (skip) |
+| `ORCHESTRATOR_URL` | Orchestrator regex (gRPC-only, currently unused) | `""` (skip) |
+
+When guardrails are deployed, set the URLs to point to the detector services (e.g. `http://guardrails-detector-ibm-hap-predictor.models.svc.cluster.local:8000`). See [`infra/guardrails/README.md`](infra/guardrails/README.md) for full architecture and testing details.
 
 ### Manual image build
 

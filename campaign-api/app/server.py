@@ -24,6 +24,11 @@ def _build_competitor_pattern() -> str:
 COMPETITOR_PATTERN = _build_competitor_pattern()
 
 
+def _build_orchestrator_regex_patterns() -> list[str]:
+    names = vcfg_competitors()
+    return [f"(?i){re.escape(name)}" for name in names] if names else []
+
+
 def guardrail_failure(layer_id: str, layer_name: str, title: str, reason: str, guidance: str, details: dict | None = None) -> dict:
     return {
         "passed": False,
@@ -35,8 +40,38 @@ def guardrail_failure(layer_id: str, layer_name: str, title: str, reason: str, g
     }
 
 
-def check_guardrails(campaign_name: str, description: str) -> dict:
-    text = f"{campaign_name} {description}"
+def _check_competitor_via_orchestrator(text: str) -> dict | None:
+    patterns = _build_orchestrator_regex_patterns()
+    if not patterns:
+        return None
+
+    if settings.ORCHESTRATOR_URL:
+        try:
+            with httpx.Client(timeout=5.0, verify=False) as client:
+                resp = client.post(
+                    f"{settings.ORCHESTRATOR_URL}/api/v2/text/detection/content",
+                    json={
+                        "content": text,
+                        "detectors": {"regex_competitor": {"regex": patterns}},
+                    },
+                    headers={"Content-Type": "application/json"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for det in data.get("detections", []):
+                        if det.get("score", 0) >= 0.5:
+                            matched = det.get("text", "competitor name")
+                            return guardrail_failure(
+                                "regex_competitor", "Brand Compliance",
+                                "Competitor reference detected",
+                                f'The campaign mentions "{matched}", which is blocked by the competitor-name guardrail.',
+                                "Remove competitor brand names and rewrite the campaign using your own property names only.",
+                                {"matched_text": matched},
+                            )
+                    return None
+                print(f"[Guardrails] Orchestrator returned {resp.status_code}, falling back to local regex")
+        except Exception as e:
+            print(f"[Guardrails] Orchestrator unreachable ({e}), falling back to local regex")
 
     match = re.search(COMPETITOR_PATTERN, text)
     if match:
@@ -48,7 +83,70 @@ def check_guardrails(campaign_name: str, description: str) -> dict:
             "Remove competitor brand names and rewrite the campaign using your own property names only.",
             {"matched_text": blocked_term},
         )
+    return None
 
+
+def check_guardrails(campaign_name: str, description: str) -> dict:
+    text = f"{campaign_name} {description}"
+
+    # Layer 1: Regex competitor names (orchestrator with local fallback)
+    competitor_hit = _check_competitor_via_orchestrator(text)
+    if competitor_hit:
+        return competitor_hit
+
+    # Layer 2: TrustyAI HAP detector — hate/abuse/profanity
+    if settings.HAP_DETECTOR_URL:
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(
+                    f"{settings.HAP_DETECTOR_URL}/api/v1/text/contents",
+                    json={"contents": [text], "detector_params": {}},
+                    headers={"Content-Type": "application/json", "detector-id": "hap"},
+                )
+                if resp.status_code == 200:
+                    results = resp.json()
+                    if results and results[0]:
+                        for det in results[0]:
+                            if det.get("score", 0) > 0.5:
+                                label = det.get("label") or det.get("name") or "unsafe content"
+                                score = round(det.get("score", 0), 3)
+                                return guardrail_failure(
+                                    "hap", "Content Safety Check",
+                                    "Inappropriate language detected",
+                                    "The campaign contains language that does not meet our professional standards. Please ensure all wording is appropriate for a luxury brand audience.",
+                                    "Revise the campaign name and description to use professional, premium language suitable for high-value customers.",
+                                    {"label": label, "score": score},
+                                )
+        except Exception as e:
+            print(f"[Guardrails] HAP check failed (non-blocking): {e}")
+
+    # Layer 3: TrustyAI Prompt Injection detector
+    if settings.PROMPT_INJECTION_URL:
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(
+                    f"{settings.PROMPT_INJECTION_URL}/api/v1/text/contents",
+                    json={"contents": [text], "detector_params": {}},
+                    headers={"Content-Type": "application/json", "detector-id": "prompt_injection"},
+                )
+                if resp.status_code == 200:
+                    results = resp.json()
+                    if results and results[0]:
+                        for det in results[0]:
+                            if det.get("score", 0) > 0.5:
+                                label = det.get("label") or det.get("name") or "prompt injection risk"
+                                score = round(det.get("score", 0), 3)
+                                return guardrail_failure(
+                                    "prompt_injection", "Input Validation",
+                                    "Suspicious input pattern detected",
+                                    "The campaign description contains instruction-like patterns that could interfere with content generation. Please use natural marketing language only.",
+                                    "Rewrite the description as a straightforward campaign brief — avoid technical instructions, system commands, or directive language.",
+                                    {"label": label, "score": score},
+                                )
+        except Exception as e:
+            print(f"[Guardrails] Prompt injection check failed (non-blocking): {e}")
+
+    # Layer 4: Policy Guardian Agent (A2A) — business logic
     try:
         from a2a.client import create_client, ClientConfig
         from a2a.types import SendMessageRequest, Message, Part, Role
