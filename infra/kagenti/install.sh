@@ -358,6 +358,37 @@ oc rollout restart deployment/kagenti-controller-manager -n "$NAMESPACE" 2>/dev/
 oc wait --for=condition=Available deployment/kagenti-controller-manager \
   -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
 
+# MLflow trace-name trigger: OTLP ingest doesn't set mlflow.traceName tag (fixed in v3.13+)
+# Must run AFTER MLflow patches above, so MLflow has finished restarting and alembic has created the spans table.
+echo "  Waiting for MLflow to be ready..."
+oc wait --for=condition=Available deployment/mlflow -n "$NAMESPACE" --timeout=180s 2>/dev/null || true
+echo "  Installing MLflow trace-name trigger..."
+POSTGRES_POD=$(oc get pods -n "$NAMESPACE" -l app=postgres-otel -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+if [ -n "$POSTGRES_POD" ]; then
+  oc exec "$POSTGRES_POD" -n "$NAMESPACE" -- psql -U testuser -d mlflow -c "
+    CREATE OR REPLACE FUNCTION set_trace_name_from_root_span()
+    RETURNS TRIGGER AS \$\$
+    BEGIN
+        IF NEW.parent_span_id IS NULL THEN
+            INSERT INTO trace_tags (request_id, key, value)
+            VALUES (NEW.trace_id, 'mlflow.traceName', NEW.name)
+            ON CONFLICT (request_id, key) DO UPDATE SET value = EXCLUDED.value;
+        END IF;
+        RETURN NEW;
+    END;
+    \$\$ LANGUAGE plpgsql;
+    DO \$\$ BEGIN
+        CREATE TRIGGER trg_set_trace_name
+            AFTER INSERT ON spans
+            FOR EACH ROW
+            EXECUTE FUNCTION set_trace_name_from_root_span();
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END \$\$;
+  " 2>/dev/null && echo "    done" || echo "    skipped (postgres-otel not ready)"
+else
+  echo "    skipped (postgres-otel not found)"
+fi
+
 # ---------------------------------------------------------------------------
 # Phase 8: Clean up Keycloak users — keep only admin, create keycloak-admin secret
 # ---------------------------------------------------------------------------

@@ -11,6 +11,14 @@ from app.agent import DeliveryManagerAgent
 
 logger = logging.getLogger(__name__)
 
+
+def get_a2a_agent_headers(context: RequestContext) -> dict:
+    agent_headers = (getattr(context.call_context, "state", {}) or {}).get("headers", {})
+    if not agent_headers:
+        from app.tracing import get_trace_headers
+        agent_headers = get_trace_headers()
+    return agent_headers
+
 SKILL_DISPATCH = {
     "generate_email": "generate_email",
     "deploy_preview": "deploy_preview",
@@ -60,10 +68,20 @@ class DeliveryManagerExecutor(AgentExecutor):
 
         try:
             method = getattr(self.agent, method_name)
-            result = await method(params)
+            agent_headers = get_a2a_agent_headers(context)
+            if method_name == "generate_email":
+                result = await method(params, agent_headers)
+            else:
+                result = await method(params)
             result_json = json.dumps(result)
             await updater.add_artifact([Part(text=result_json)])
-            msg = updater.new_agent_message([Part(text=f"{skill} completed.")])
+            status = result.get("status", "done")
+            summary = f"{skill}: {status}"
+            if "url" in result:
+                summary += f"\n{result['url']}"
+            elif "preview_url" in result:
+                summary += f"\n{result['preview_url']}"
+            msg = updater.new_agent_message([Part(text=summary)])
             await updater.complete(message=msg)
         except Exception as e:
             logger.exception("Delivery Manager executor failed for skill %s", skill)

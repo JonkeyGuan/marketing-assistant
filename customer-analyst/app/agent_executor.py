@@ -12,6 +12,14 @@ from app.agent import CustomerAnalystAgent
 logger = logging.getLogger(__name__)
 
 
+def get_a2a_agent_headers(context: RequestContext) -> dict:
+    agent_headers = (getattr(context.call_context, "state", {}) or {}).get("headers", {})
+    if not agent_headers:
+        from app.tracing import get_trace_headers
+        agent_headers = get_trace_headers()
+    return agent_headers
+
+
 class CustomerAnalystExecutor(AgentExecutor):
     def __init__(self):
         self.agent = CustomerAnalystAgent()
@@ -36,11 +44,19 @@ class CustomerAnalystExecutor(AgentExecutor):
                 params = json.loads(user_input)
             except (json.JSONDecodeError, TypeError):
                 params = {"user_prompt": user_input, "campaign_id": "chat"}
-            result = await self.agent.get_customers(params)
+            agent_headers = get_a2a_agent_headers(context)
+            result = await self.agent.get_customers(params, agent_headers)
             result_json = json.dumps(result, ensure_ascii=False, default=str)
 
             await updater.add_artifact([Part(text=result_json)])
-            msg = updater.new_agent_message([Part(text="Customer retrieval complete.")])
+            customers = result.get("customers", [])
+            summary = f"Found {len(customers)} customers."
+            if customers:
+                names = [c.get("name", "?") for c in customers[:5]]
+                summary += " " + ", ".join(names)
+                if len(customers) > 5:
+                    summary += f" ... and {len(customers) - 5} more"
+            msg = updater.new_agent_message([Part(text=summary)])
             await updater.complete(message=msg)
         except Exception:
             tb = traceback.format_exc()

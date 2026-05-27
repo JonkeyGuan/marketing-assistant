@@ -8,11 +8,20 @@ from a2a.types import Task, TaskState, TaskStatus, Part
 from app.agent import CreativeProducerAgent
 
 
+def get_a2a_agent_headers(context: RequestContext) -> dict:
+    agent_headers = (getattr(context.call_context, "state", {}) or {}).get("headers", {})
+    if not agent_headers:
+        from app.tracing import get_trace_headers
+        agent_headers = get_trace_headers()
+    return agent_headers
+
+
 class CreativeProducerExecutor(AgentExecutor):
     def __init__(self):
         self.agent = CreativeProducerAgent()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        agent_headers = get_a2a_agent_headers(context)
         user_input = context.get_user_input()
         try:
             params = json.loads(user_input)
@@ -36,11 +45,13 @@ class CreativeProducerExecutor(AgentExecutor):
         )
         await updater.start_work(message=msg)
 
-        result = await self.agent.generate(params)
+        result = await self.agent.generate(params, agent_headers)
         result_json = json.dumps(result)
 
         await updater.add_artifact([Part(text=result_json)])
-        msg = updater.new_agent_message([Part(text="Landing page generation complete.")])
+        html_len = len(result.get("html", ""))
+        summary = f"Landing page generated ({html_len} chars of HTML)."
+        msg = updater.new_agent_message([Part(text=summary)])
         await updater.complete(message=msg)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:

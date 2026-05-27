@@ -1,11 +1,13 @@
 import json
 import logging
 import httpx
+from contextlib import nullcontext
 from openai import AsyncOpenAI
-
+import mlflow
+from mlflow.entities import SpanType
 from app.settings import settings
-from app.config_client import prompt as vcfg_prompt, seed_data
-from app.models import CustomerProfile, GetTargetCustomersOutput
+from app.vertical_config import prompt as vcfg_prompt, seed_data
+from app.schemas import CustomerProfile, GetTargetCustomersOutput
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,14 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = f"""{vcfg_prompt("customer_analyst_system", "You are a customer data analyst for a luxury casino resort. Given a target audience description, decide which database tool to call to retrieve the right customer segment.")} You have access to the following tools:
+_system_prompt_cache = None
+
+
+def _get_system_prompt() -> str:
+    global _system_prompt_cache
+    if _system_prompt_cache is not None:
+        return _system_prompt_cache
+    _system_prompt_cache = f"""{vcfg_prompt("customer_analyst_system", "You are a customer data analyst for a luxury casino resort. Given a target audience description, decide which database tool to call to retrieve the right customer segment.")} You have access to the following tools:
 
 - get_customers_by_tier: For specific tier queries (platinum, gold, diamond members)
 - get_prospects: For new/potential customers who aren't members yet
@@ -75,6 +84,7 @@ SYSTEM_PROMPT = f"""{vcfg_prompt("customer_analyst_system", "You are a customer 
 - get_all_vip_customers: For broad targeting across all VIP tiers
 
 Call exactly ONE tool based on the target audience description. Do not call multiple tools."""
+    return _system_prompt_cache
 
 
 _llm_client = AsyncOpenAI(
@@ -136,9 +146,7 @@ async def call_mcp_tool(tool_name: str, arguments: dict) -> list:
     from fastmcp import Client
     async with Client(f"{settings.MONGODB_MCP_URL}/mcp") as mcp_client:
         result = await mcp_client.call_tool(tool_name, arguments)
-        if result and result.content:
-            return json.loads(result.content[0].text)
-        return []
+        return json.loads(result.content[0].text) if result and result.content else []
 
 
 def _keyword_select_tool(target_audience: str, limit: int) -> tuple[str, str]:
@@ -168,7 +176,7 @@ async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "",
     stream = await _llm_client.chat.completions.create(
         model=settings.MODEL_NAME,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _get_system_prompt()},
             {"role": "user", "content": user_prompt},
         ],
         tools=TOOLS,
@@ -207,8 +215,15 @@ async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "",
     return result, recipient_type
 
 
+def _restore_trace_context(headers):
+    if headers and "traceparent" in headers:
+        from mlflow.tracing import set_tracing_context_from_http_request_headers
+        return set_tracing_context_from_http_request_headers(headers)
+    return nullcontext()
+
+
 class CustomerAnalystAgent:
-    async def get_customers(self, params: dict) -> dict:
+    async def get_customers(self, params: dict, agent_headers: dict = None) -> dict:
         user_prompt = params.get("user_prompt")
         campaign_id = params.get("campaign_id", "unknown")
         limit = params.get("limit", 50)
@@ -217,38 +232,45 @@ class CustomerAnalystAgent:
         await publish_event(campaign_id, "agent_started", "Customer Analyst", f"Identifying {target_audience}...")
 
         try:
-            await publish_event(campaign_id, "workflow_status", "Customer Analyst", "Analyzing target audience...")
+            with _restore_trace_context(agent_headers):
+                with mlflow.start_span("customer_analyst", span_type=SpanType.AGENT) as span:
+                    span._span.set_attribute("session.id", campaign_id)
+                    span.set_inputs({"target_audience": target_audience, "limit": limit, "campaign_id": campaign_id})
 
-            if user_prompt:
-                customers_data, recipient_type = await _llm_select_and_call_tool(user_prompt, limit=limit)
-            else:
-                prompt = f"Retrieve customers for this target audience: {target_audience} (limit: {limit})"
-                customers_data, recipient_type = await _llm_select_and_call_tool(prompt, target_audience, limit)
+                    await publish_event(campaign_id, "workflow_status", "Customer Analyst", "Analyzing target audience...")
 
-            customers = [
-                CustomerProfile(
-                    customer_id=c.get("customer_id", ""),
-                    name=c.get("name", ""),
-                    name_en=c.get("name_en"),
-                    email=c.get("email", ""),
-                    tier=c.get("tier", ""),
-                    preferred_language=c.get("preferred_language", "en"),
-                    interests=c.get("interests", []),
-                    total_spend=c.get("total_spend"),
-                    last_visit=c.get("last_visit"),
-                    source=c.get("source")
-                )
-                for c in customers_data
-            ]
+                    if user_prompt:
+                        customers_data, recipient_type = await _llm_select_and_call_tool(user_prompt, limit=limit)
+                    else:
+                        prompt = f"Retrieve customers for this target audience: {target_audience} (limit: {limit})"
+                        customers_data, recipient_type = await _llm_select_and_call_tool(prompt, target_audience, limit)
 
-            await publish_event(campaign_id, "agent_completed", "Customer Analyst",
-                              f"Found {len(customers)} {recipient_type}",
-                              {"count": len(customers), "recipient_type": recipient_type})
+                    customers = [
+                        CustomerProfile(
+                            customer_id=c.get("customer_id", ""),
+                            name=c.get("name", ""),
+                            name_en=c.get("name_en"),
+                            email=c.get("email", ""),
+                            tier=c.get("tier", ""),
+                            preferred_language=c.get("preferred_language", "en"),
+                            interests=c.get("interests", []),
+                            total_spend=c.get("total_spend"),
+                            last_visit=c.get("last_visit"),
+                            source=c.get("source")
+                        )
+                        for c in customers_data
+                    ]
 
-            return GetTargetCustomersOutput(
-                customers=customers, count=len(customers),
-                recipient_type=recipient_type, status="success"
-            ).model_dump()
+                    await publish_event(campaign_id, "agent_completed", "Customer Analyst",
+                                      f"Found {len(customers)} {recipient_type}",
+                                      {"count": len(customers), "recipient_type": recipient_type})
+
+                    result = GetTargetCustomersOutput(
+                        customers=customers, count=len(customers),
+                        recipient_type=recipient_type, status="success"
+                    ).model_dump()
+                    span.set_outputs({"count": len(customers), "recipient_type": recipient_type, "status": "success"})
+                    return result
 
         except Exception as e:
             logger.exception("get_customers failed")

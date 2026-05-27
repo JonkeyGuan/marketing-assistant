@@ -1,3 +1,6 @@
+from app.tracing import setup_telemetry
+setup_telemetry()
+
 import logging
 from app.settings import settings
 
@@ -24,6 +27,7 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 
 from app.agent_executor import DeliveryManagerExecutor
+from app.tracing import TraceContextMiddleware
 
 host = "0.0.0.0"
 agent_endpoint = settings.AGENT_ENDPOINT or f"http://localhost:{settings.PORT}"
@@ -71,9 +75,11 @@ app = Starlette(
         Route("/healthz", health_check, methods=["GET"]),
         Route("/readyz", health_check, methods=["GET"]),
         *create_agent_card_routes(agent_card),
-        *create_jsonrpc_routes(handler, rpc_url="/"),
+        *create_jsonrpc_routes(handler, rpc_url="/", enable_v0_3_compat=True),
     ],
+    middleware=[],
 )
+app.add_middleware(TraceContextMiddleware)
 
 if __name__ == "__main__":
     uvicorn.run(app, host=host, port=settings.PORT)

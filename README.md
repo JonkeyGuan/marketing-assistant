@@ -189,41 +189,72 @@ export VERTICAL_CONFIG=hotel-casino   # default
 
 All other services fetch their configuration from config-service at startup via REST API. Each vertical config defines: brand identity, properties, customer tiers, themes, competitor names (for guardrails), LLM prompts, quick-start presets, and seed data. See [`config-service/app/verticals/hotel-casino.json`](config-service/app/verticals/hotel-casino.json) for the full schema.
 
-## Deploy to OpenShift
+## Observability
+
+Agent LLM calls are automatically traced via [OpenTelemetry](https://opentelemetry.io/) and MLflow. Each agent uses MLflow's tracing SDK to instrument workflows and LLM calls, exporting spans via OTLP to the kagenti platform's otel-collector, which forwards them to MLflow.
+
+**Architecture**: Agent (MLflow SDK) → OTLP → otel-collector (kagenti-system) → MLflow Server
+
+Environment variables (set in `k8s.yaml` / `.k8s.yaml`):
+
+| Variable | Description |
+|---|---|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | otel-collector HTTP endpoint for traces |
+| `OTEL_SERVICE_NAME` | Identifies the agent in trace views (e.g. `campaign-director`) |
+
+### Trace metadata
+
+MLflow UI displays three key columns populated by span attributes:
+
+| Column | Span attribute | Source |
+|---|---|---|
+| **Trace name** | `mlflow.traceName` | Set by `_TraceNameProcessor` in `otel_setup.py` (root span name). A PostgreSQL trigger on the MLflow DB also sets this for OTLP-ingested traces (workaround until MLflow v3.13+). |
+| **Session** | `session.id` | Campaign ID, set by each agent on its root span. |
+| **User** | `user.id` | Keycloak `preferred_username` extracted from the JWT bearer token in campaign-director. Sub-agents inherit the parent trace context via `traceparent` header propagation. |
+
+### Trace context propagation
+
+Campaign-director sends `traceparent` HTTP headers when calling sub-agents via A2A. Each sub-agent captures these headers through `TraceContextMiddleware` (Starlette middleware) and restores the trace context so all spans join the same distributed trace.
+
+Traces are visible in the kagenti MLflow UI under the `marketing-assistant` experiment.
+
+## Deploy to OpenShift (Kagenti)
+
+### Prerequisites
+
+1. Logged in to OpenShift (`oc login`)
+2. [Kagenti platform](infra/kagenti/) installed (`infra/kagenti/install.sh`)
+3. Container images built and pushed (each service has `build.sh`)
+4. Secrets configured: copy `k8s.yaml` to `.k8s.yaml` per service and fill in `MODEL_ENDPOINT`, `MODEL_API_KEY`, `MONGODB_URI`, `CLUSTER_DOMAIN` etc.
+
+### Deploy
 
 ```bash
-NAMESPACE=<your-namespace>
-
-# 1. Deploy MongoDB
-oc apply -f mongodb/k8s.yaml -n $NAMESPACE
-
-# 2. Build and push all images
-for svc in campaign-api campaign-director creative-producer customer-analyst \
-           delivery-manager policy-guardian event-hub mongodb-mcp imagegen-mcp \
-           config-service campaign-landing frontend; do
-  cd $svc && ./build.sh && cd ..
-done
-
-# 3. Create vertical config ConfigMap (not baked into image)
-oc create configmap vertical-config \
-  --from-file=config-service/app/verticals/ \
-  -n $NAMESPACE
-
-# 4. Configure secrets: edit k8s.yaml for each service, replace <TODO> with actual values
-#    - mongodb-mcp:       MONGODB_URI
-#    - creative-producer: MODEL_ENDPOINT, MODEL_API_KEY
-#    - customer-analyst:  MODEL_ENDPOINT, MODEL_API_KEY
-#    - delivery-manager:  MODEL_ENDPOINT, MODEL_API_KEY
-#    - policy-guardian:   MODEL_ENDPOINT, MODEL_API_KEY
-#    - imagegen-mcp:      MODEL_ENDPOINT, MODEL_API_KEY
-
-# 5. Apply manifests
-for svc in config-service event-hub mongodb-mcp imagegen-mcp customer-analyst \
-           policy-guardian creative-producer delivery-manager campaign-director \
-           campaign-api frontend; do
-  oc apply -f $svc/k8s.yaml -n $NAMESPACE
-done
+./deploy.sh
 ```
+
+This script handles:
+- Namespace creation with kagenti labels
+- `vertical-config` ConfigMap (config-service verticals)
+- AuthBridge config sync + SCC grants (kagenti sidecar injection)
+- All service manifests (`.k8s.yaml` priority, fallback to `k8s.yaml`)
+- Keycloak SSO: `marketing-ui` client (public, PKCE), demo users (alice/bob), roles
+
+### Uninstall
+
+```bash
+./undeploy.sh
+```
+
+Removes all application resources, Keycloak client/users/roles, and the namespace.
+
+### Manual image build
+
+```bash
+cd <service> && ./build.sh <tag>
+```
+
+Services requiring rebuild for kagenti: `frontend` (SSO integration) and `campaign-api` (token forwarding).
 
 ## Technology Stack
 

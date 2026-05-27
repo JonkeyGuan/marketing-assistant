@@ -2,11 +2,14 @@ import os
 import json
 import httpx
 import traceback
+from contextlib import nullcontext
 from openai import AsyncOpenAI
+import mlflow
+from mlflow.entities import SpanType
 
 from app.settings import settings
-from app.models import CAMPAIGN_THEMES
-from app.config_client import get_config, prompt as vcfg_prompt, brand, themes as vcfg_themes
+from app.schemas import CAMPAIGN_THEMES
+from app.vertical_config import prompt as vcfg_prompt, brand, themes as vcfg_themes
 
 BASE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "base_template.html")
 
@@ -24,25 +27,37 @@ def is_mock_mode() -> bool:
     return not settings.MODEL_ENDPOINT
 
 
-def _load_theme_preset_names() -> dict:
-    cfg_themes = vcfg_themes()
-    if cfg_themes:
-        return {k: v.get("preset_name", k) for k, v in cfg_themes.items()}
-    return {
-        "luxury_gold": "The Heritage Collection",
-        "festive_red": "The Celebration Suite",
-        "modern_black": "The Urban Retreat",
-        "classic_emerald": "The Grand Stakes",
-    }
+_theme_preset_names_cache = None
 
-THEME_PRESET_NAMES = _load_theme_preset_names()
 
-_CREATIVE_INTRO = vcfg_prompt(
-    "creative_producer_system",
-    'You are a premier Digital Brand Architect specializing in high-conversion marketing for luxury hotels and ultra-exclusive resorts. Your expertise is "Visual Hospitality" — translating a physical five-star experience into a digital interface that feels as refined and welcoming as a grand lobby.'
-)
+def _get_theme_preset_names() -> dict:
+    global _theme_preset_names_cache
+    if _theme_preset_names_cache is None:
+        cfg_themes = vcfg_themes()
+        if cfg_themes:
+            _theme_preset_names_cache = {k: v.get("preset_name", k) for k, v in cfg_themes.items()}
+        else:
+            _theme_preset_names_cache = {
+                "luxury_gold": "The Heritage Collection",
+                "festive_red": "The Celebration Suite",
+                "modern_black": "The Urban Retreat",
+                "classic_emerald": "The Grand Stakes",
+            }
+    return _theme_preset_names_cache
 
-SYSTEM_PROMPT = f"""{_CREATIVE_INTRO}
+
+_system_prompt_cache = None
+
+
+def _get_system_prompt() -> str:
+    global _system_prompt_cache
+    if _system_prompt_cache is not None:
+        return _system_prompt_cache
+    intro = vcfg_prompt(
+        "creative_producer_system",
+        'You are a premier Digital Brand Architect specializing in high-conversion marketing for luxury hotels and ultra-exclusive resorts. Your expertise is "Visual Hospitality" — translating a physical five-star experience into a digital interface that feels as refined and welcoming as a grand lobby.'
+    )
+    _system_prompt_cache = f"""{intro}
 
 ## Core Design Principles:
 1. "The Check-In Impression": Your designs feel like a premium arrival experience.
@@ -66,6 +81,7 @@ First: a <style> block with your creative CSS (100-200 lines).
 Then: ---CONTENT--- followed by key-value content lines.
 
 Do NOT output anything else — no explanations, no HTML, no markdown fences."""
+    return _system_prompt_cache
 
 
 def load_base_template() -> str:
@@ -247,7 +263,7 @@ async def generate_html_with_streaming(
                             hero_image_url, hotel_name, start_date, end_date)
 
     import random
-    preset_name = THEME_PRESET_NAMES.get(theme, "The Heritage Collection")
+    preset_name = _get_theme_preset_names().get(theme, "The Heritage Collection")
     hero_note = ""
     if hero_image_url:
         hero_note = "\nThe hero section has an AI-generated background image — make it feel cinematic with overlays and blend modes."
@@ -350,7 +366,7 @@ STORY_TEXT: (2-3 sentences, luxury editorial tone)
 
 ALL content must be in English only."""
 
-    raw_response = await stream_llm(SYSTEM_PROMPT, user_prompt)
+    raw_response = await stream_llm(_get_system_prompt(), user_prompt)
 
     if "<!DOCTYPE" in raw_response or "<html" in raw_response:
         html = raw_response.strip()
@@ -369,43 +385,58 @@ ALL content must be in English only."""
                          hero_image_url, hotel_name, start_date, end_date)
 
 
+def _restore_trace_context(headers):
+    if headers and "traceparent" in headers:
+        from mlflow.tracing import set_tracing_context_from_http_request_headers
+        return set_tracing_context_from_http_request_headers(headers)
+    return nullcontext()
+
+
 class CreativeProducerAgent:
-    async def generate(self, params: dict) -> dict:
+    async def generate(self, params: dict, agent_headers: dict = None) -> dict:
         campaign_id = params.get("campaign_id", "unknown")
+
         await publish_event(campaign_id, "agent_started", "Creative Producer", "Creating campaign visuals...")
 
         try:
-            hero_image_url = await generate_hero_image(
-                campaign_name=params["campaign_name"],
-                hotel_name=params["hotel_name"],
-                theme=params["theme"],
-                description=params["campaign_description"]
-            )
+            with _restore_trace_context(agent_headers):
+                with mlflow.start_span("creative_producer", span_type=SpanType.AGENT) as span:
+                    span._span.set_attribute("session.id", campaign_id)
+                    span.set_inputs(params)
 
-            if hero_image_url:
-                await publish_event(campaign_id, "agent_completed", "Creative Producer",
-                                  "Campaign visuals ready", {"image_url": hero_image_url})
-            else:
-                await publish_event(campaign_id, "workflow_status", "Creative Producer",
-                                  "Applying theme design...")
+                    hero_image_url = await generate_hero_image(
+                        campaign_name=params["campaign_name"],
+                        hotel_name=params["hotel_name"],
+                        theme=params["theme"],
+                        description=params["campaign_description"]
+                    )
 
-            await publish_event(campaign_id, "agent_started", "Creative Producer",
-                              "Designing your landing page...")
+                    if hero_image_url:
+                        await publish_event(campaign_id, "agent_completed", "Creative Producer",
+                                          "Campaign visuals ready", {"image_url": hero_image_url})
+                    else:
+                        await publish_event(campaign_id, "workflow_status", "Creative Producer",
+                                          "Applying theme design...")
 
-            html = await generate_html_with_streaming(
-                campaign_name=params["campaign_name"],
-                campaign_description=params["campaign_description"],
-                hotel_name=params["hotel_name"],
-                theme=params["theme"],
-                start_date=params["start_date"],
-                end_date=params["end_date"],
-                hero_image_url=hero_image_url,
-            )
+                    await publish_event(campaign_id, "agent_started", "Creative Producer",
+                                      "Designing your landing page...")
 
-            await publish_event(campaign_id, "agent_completed", "Creative Producer",
-                              "Landing page ready", {"html_length": len(html)})
+                    html = await generate_html_with_streaming(
+                        campaign_name=params["campaign_name"],
+                        campaign_description=params["campaign_description"],
+                        hotel_name=params["hotel_name"],
+                        theme=params["theme"],
+                        start_date=params["start_date"],
+                        end_date=params["end_date"],
+                        hero_image_url=hero_image_url,
+                    )
 
-            return {"html": html, "hero_image_url": hero_image_url, "status": "success"}
+                    await publish_event(campaign_id, "agent_completed", "Creative Producer",
+                                      "Landing page ready", {"html_length": len(html)})
+
+                    result = {"html": html, "hero_image_url": hero_image_url, "status": "success"}
+                    span.set_outputs(result)
+                    return result
 
         except Exception as e:
             traceback.print_exc()

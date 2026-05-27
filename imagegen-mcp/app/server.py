@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.requests import Request
 
 from app.settings import settings
-from app.config_client import prompt as vcfg_prompt
+from app.vertical_config import prompt as vcfg_prompt
 
 mcp = FastMCP("Image Generation MCP")
 

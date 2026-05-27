@@ -3,11 +3,13 @@ import uuid
 import datetime
 import httpx
 from typing import List
+from contextlib import nullcontext
 from openai import AsyncOpenAI
-
+import mlflow
+from mlflow.entities import SpanType
 from app.settings import settings
-from app.config_client import prompt as vcfg_prompt, brand
-from app.models import (
+from app.vertical_config import prompt as vcfg_prompt, brand
+from app.schemas import (
     CustomerProfile,
     GenerateEmailInput, GenerateEmailOutput,
     DeployPreviewInput, DeployPreviewOutput,
@@ -27,7 +29,14 @@ def is_mock_mode() -> bool:
     return not settings.MODEL_ENDPOINT
 
 
-MARKETING_SYSTEM_PROMPT = f"""{vcfg_prompt("delivery_manager_system", "You are a luxury casino marketing expert creating personalized email campaigns.")}
+_marketing_system_prompt_cache = None
+
+
+def _get_marketing_system_prompt() -> str:
+    global _marketing_system_prompt_cache
+    if _marketing_system_prompt_cache is not None:
+        return _marketing_system_prompt_cache
+    _marketing_system_prompt_cache = f"""{vcfg_prompt("delivery_manager_system", "You are a luxury casino marketing expert creating personalized email campaigns.")}
 
 Generate email content in the following EXACT format:
 
@@ -57,6 +66,7 @@ Generate email content in the following EXACT format:
 - Use EXACTLY `{{{{customer_name}}}}` as the greeting placeholder
 - The CTA button href MUST be EXACTLY `{{{{campaign_link}}}}`
 - Sign off with the hotel/casino name"""
+    return _marketing_system_prompt_cache
 
 
 MOCK_EMAIL = {
@@ -141,7 +151,7 @@ Generate the email content now:"""
     stream = await _llm_client.chat.completions.create(
         model=settings.MODEL_NAME,
         messages=[
-            {"role": "system", "content": MARKETING_SYSTEM_PROMPT},
+            {"role": "system", "content": _get_marketing_system_prompt()},
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.7,
@@ -395,33 +405,47 @@ def cleanup_campaign_k8s(campaign_id: str):
     return {"status": "success", "deleted": deleted}
 
 
+def _restore_trace_context(headers):
+    if headers and "traceparent" in headers:
+        from mlflow.tracing import set_tracing_context_from_http_request_headers
+        return set_tracing_context_from_http_request_headers(headers)
+    return nullcontext()
+
+
 class DeliveryManagerAgent:
-    async def generate_email(self, params: dict) -> dict:
+    async def generate_email(self, params: dict, agent_headers: dict = None) -> dict:
         validated = GenerateEmailInput(**params)
         campaign_id = params.get("campaign_id", str(uuid.uuid4())[:8])
 
         await publish_event(campaign_id, "agent_started", "Delivery Manager", "Writing personalized emails...")
 
         try:
-            email_data = await generate_email_with_streaming(
-                campaign_name=validated.campaign_name,
-                campaign_description=validated.campaign_description,
-                hotel_name=validated.hotel_name,
-                campaign_url=validated.campaign_url,
-                target_audience=validated.target_audience,
-                start_date=validated.start_date,
-                end_date=validated.end_date,
-            )
+            with _restore_trace_context(agent_headers):
+                with mlflow.start_span("delivery_manager", span_type=SpanType.AGENT) as span:
+                    span._span.set_attribute("session.id", campaign_id)
+                    span.set_inputs({"campaign_name": validated.campaign_name, "hotel_name": validated.hotel_name, "target_audience": validated.target_audience})
 
-            result = GenerateEmailOutput(
-                email_subject_en=email_data.get("email_subject_en", ""),
-                email_body_en=email_data.get("email_body_en", ""),
-                email_subject_zh=email_data.get("email_subject_zh", ""),
-                email_body_zh=email_data.get("email_body_zh", ""),
-                status="success",
-            )
-            await publish_event(campaign_id, "agent_completed", "Delivery Manager", "Email content ready")
-            return result.model_dump()
+                    email_data = await generate_email_with_streaming(
+                        campaign_name=validated.campaign_name,
+                        campaign_description=validated.campaign_description,
+                        hotel_name=validated.hotel_name,
+                        campaign_url=validated.campaign_url,
+                        target_audience=validated.target_audience,
+                        start_date=validated.start_date,
+                        end_date=validated.end_date,
+                    )
+
+                    result = GenerateEmailOutput(
+                        email_subject_en=email_data.get("email_subject_en", ""),
+                        email_body_en=email_data.get("email_body_en", ""),
+                        email_subject_zh=email_data.get("email_subject_zh", ""),
+                        email_body_zh=email_data.get("email_body_zh", ""),
+                        status="success",
+                    )
+                    await publish_event(campaign_id, "agent_completed", "Delivery Manager", "Email content ready")
+                    output = result.model_dump()
+                    span.set_outputs({"status": "success", "email_subject_en": email_data.get("email_subject_en", "")})
+                    return output
 
         except Exception as e:
             await publish_event(campaign_id, "agent_error", "Delivery Manager",

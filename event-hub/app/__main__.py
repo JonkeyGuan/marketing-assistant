@@ -14,7 +14,7 @@ if __name__ == "__main__":
         "--bind", f"0.0.0.0:{settings.PORT}",
         "--worker-class", "gthread",
         "--workers", "1",
-        "--threads", "4",
+        "--threads", "16",
         "--timeout", "0",
         "--no-control-socket",
     ])

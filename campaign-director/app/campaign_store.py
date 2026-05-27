@@ -35,7 +35,7 @@ class CampaignStore:
             logger.info("Campaign store: disk persistence disabled (%s), using memory-only", e)
 
     def _load_from_disk(self):
-        from app.models import CampaignData
+        from app.schemas import CampaignData
         for f in self._storage_path.glob("*.json"):
             try:
                 obj = json.loads(f.read_text(encoding="utf-8"))

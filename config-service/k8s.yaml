@@ -29,7 +29,8 @@ spec:
     spec:
       containers:
       - name: config-service
-        image: quay.io/jonkey/marketing-assistant/config-service:1.0
+        image: quay.io/jonkey/marketing-assistant/config-service:2.0
+        imagePullPolicy: Always
         ports:
         - containerPort: 8081
           protocol: TCP
@@ -48,11 +49,14 @@ spec:
             memory: "256Mi"
             cpu: "200m"
         livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8081
-          initialDelaySeconds: 10
-          periodSeconds: 10
+          exec:
+            command:
+            - python3
+            - -c
+            - "import urllib.request; urllib.request.urlopen('http://config-service:8081/healthz', timeout=5)"
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /healthz

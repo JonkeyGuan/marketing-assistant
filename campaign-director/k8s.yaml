@@ -18,6 +18,11 @@ data:
   CAMPAIGN_STORAGE_PATH: "/data/campaigns"
   CONFIG_SERVICE_URL: "http://config-service:8081"
   LOG_LEVEL: "INFO"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335"
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335/v1/traces"
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf"
+  MLFLOW_EXPERIMENT_NAME: "marketing-assistant"
+  OTEL_SERVICE_NAME: "campaign-director"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -27,6 +32,9 @@ metadata:
     app: campaign-director
     app.kubernetes.io/name: campaign-director
     app.kubernetes.io/component: agent
+    kagenti.io/type: agent
+    kagenti.io/framework: LangGraph
+    protocol.kagenti.io/a2a: ''
 spec:
   replicas: 1
   strategy:
@@ -38,10 +46,15 @@ spec:
     metadata:
       labels:
         app: campaign-director
+        kagenti.io/type: agent
+        kagenti.io/framework: LangGraph
+        protocol.kagenti.io/a2a: ''
     spec:
+      serviceAccountName: campaign-director
       containers:
       - name: campaign-director
-        image: quay.io/jonkey/marketing-assistant/campaign-director:1.0
+        image: quay.io/jonkey/marketing-assistant/campaign-director:2.0
+        imagePullPolicy: Always
         ports:
         - containerPort: 8088
           protocol: TCP
@@ -53,22 +66,26 @@ spec:
           mountPath: /data/campaigns
         resources:
           requests:
-            memory: "256Mi"
+            memory: "384Mi"
             cpu: "100m"
           limits:
-            memory: "512Mi"
+            memory: "768Mi"
             cpu: "500m"
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8088
+          failureThreshold: 60
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8088
-          initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8088
-          initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
       - name: campaign-storage
@@ -94,6 +111,8 @@ metadata:
   name: campaign-director
   labels:
     app: campaign-director
+    kagenti.io/type: agent
+    protocol.kagenti.io/a2a: ''
 spec:
   selector:
     app: campaign-director
@@ -103,3 +122,8 @@ spec:
     targetPort: 8088
     protocol: TCP
   type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: campaign-director

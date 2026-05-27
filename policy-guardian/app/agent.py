@@ -1,16 +1,24 @@
 import json
 import httpx
+from contextlib import nullcontext
 from openai import AsyncOpenAI
-
+import mlflow
+from mlflow.entities import SpanType
 from app.settings import settings
-from app.config_client import prompt as vcfg_prompt
+from app.vertical_config import prompt as vcfg_prompt
 
-_PG_INTRO = vcfg_prompt("policy_guardian_intro", "You are a luxury casino resort marketing policy validator.")
-_PG_REJECTED = vcfg_prompt("policy_guardian_rejected_examples", '- "99% Off All Hotel Rooms" → REJECTED: Unrealistic discount\n- "Free Everything For Everyone" → REJECTED: Unrealistic offer\n- "Win Big Guaranteed at Our Tables" → REJECTED: Misleading promise\n- "Cheapest Rooms in Macau" → REJECTED: Not appropriate for luxury brand')
-_PG_APPROVED = vcfg_prompt("policy_guardian_approved_examples", '- "Exclusive 30% off suites for platinum members" → APPROVED\n- "Complimentary spa treatment with 2-night stay" → APPROVED\n- "Private dining experience for diamond tier guests" → APPROVED\n- "VIP gala evening with world-class entertainment" → APPROVED')
-_PG_COST = vcfg_prompt("policy_guardian_cost_note", "a luxury hotel night costs $300+")
+_policy_prompt_cache = None
 
-POLICY_PROMPT = f"""{_PG_INTRO}
+
+def _get_policy_prompt() -> str:
+    global _policy_prompt_cache
+    if _policy_prompt_cache is not None:
+        return _policy_prompt_cache
+    pg_intro = vcfg_prompt("policy_guardian_intro", "You are a luxury casino resort marketing policy validator.")
+    pg_rejected = vcfg_prompt("policy_guardian_rejected_examples", '- "99% Off All Hotel Rooms" → REJECTED: Unrealistic discount\n- "Free Everything For Everyone" → REJECTED: Unrealistic offer\n- "Win Big Guaranteed at Our Tables" → REJECTED: Misleading promise\n- "Cheapest Rooms in Macau" → REJECTED: Not appropriate for luxury brand')
+    pg_approved = vcfg_prompt("policy_guardian_approved_examples", '- "Exclusive 30% off suites for platinum members" → APPROVED\n- "Complimentary spa treatment with 2-night stay" → APPROVED\n- "Private dining experience for diamond tier guests" → APPROVED\n- "VIP gala evening with world-class entertainment" → APPROVED')
+    pg_cost = vcfg_prompt("policy_guardian_cost_note", "a luxury hotel night costs $300+")
+    _policy_prompt_cache = f"""{pg_intro}
 
 RULES:
 1. No discounts greater than 50%
@@ -20,12 +28,12 @@ RULES:
 5. Must maintain exclusivity — no cheap or mass-market language
 
 EXAMPLES OF REJECTED CAMPAIGNS:
-{_PG_REJECTED}
+{pg_rejected}
 - "Buy 2 Nights Get 80% Off" → REJECTED: Unrealistic discount
 - "Unlimited Free Drinks and Casino Credits" → REJECTED: Unrealistic offer
 
 EXAMPLES OF APPROVED CAMPAIGNS:
-{_PG_APPROVED}
+{pg_approved}
 - "50% off luxury suite upgrade for loyalty members" → APPROVED
 - "Free 2 night stay with $1000 spent" → APPROVED (conditional offer, not unrealistic)
 - "Complimentary airport transfer for VIP members" → APPROVED
@@ -35,7 +43,7 @@ NOTE: "Free" or "complimentary" offers are only APPROVED if the condition is pro
 - "Free 2 nights with $1000 spent" → APPROVED (proportional)
 - "Free 2 nights with $50 spent" → REJECTED (spend too low for the reward)
 - "Free spa with 2-night booking" → APPROVED (proportional)
-Use common sense: {_PG_COST}. The spend must be reasonable relative to what is offered for free.
+Use common sense: {pg_cost}. The spend must be reasonable relative to what is offered for free.
 
 NOW EVALUATE:
 Campaign Name: {{campaign_name}}
@@ -43,6 +51,7 @@ Campaign Description: {{description}}
 
 Respond with ONLY: APPROVED or REJECTED: <brief reason>
 No thinking, no XML tags, one line only."""
+    return _policy_prompt_cache
 
 
 async def publish_event(campaign_id: str, event_type: str, agent: str, task: str, data: dict = None):
@@ -74,7 +83,7 @@ async def validate_policy(campaign_name: str, description: str) -> dict:
         print("[Policy Guardian] Mock mode — auto-approving")
         return {"approved": True, "reason": ""}
 
-    prompt = POLICY_PROMPT.format(campaign_name=campaign_name, description=description)
+    prompt = _get_policy_prompt().format(campaign_name=campaign_name, description=description)
     try:
         response = await _llm_client.chat.completions.create(
             model=settings.MODEL_NAME,
@@ -95,8 +104,15 @@ async def validate_policy(campaign_name: str, description: str) -> dict:
         return {"approved": True, "reason": ""}
 
 
+def _restore_trace_context(headers):
+    if headers and "traceparent" in headers:
+        from mlflow.tracing import set_tracing_context_from_http_request_headers
+        return set_tracing_context_from_http_request_headers(headers)
+    return nullcontext()
+
+
 class PolicyGuardianAgent:
-    async def validate(self, params: dict) -> dict:
+    async def validate(self, params: dict, agent_headers: dict = None) -> dict:
         campaign_id = params.get("campaign_id", "unknown")
         campaign_name = params.get("campaign_name", "")
         description = params.get("campaign_description", "")
@@ -104,13 +120,20 @@ class PolicyGuardianAgent:
         await publish_event(campaign_id, "agent_started", "Policy Guardian", "Checking campaign policies...")
 
         try:
-            result = await validate_policy(campaign_name, description)
-            if result["approved"]:
-                await publish_event(campaign_id, "agent_completed", "Policy Guardian", "Campaign approved")
-                return {"approved": True, "reason": "", "status": "success"}
-            else:
-                await publish_event(campaign_id, "agent_completed", "Policy Guardian", f"Campaign rejected: {result['reason']}")
-                return {"approved": False, "reason": result["reason"], "status": "success"}
+            with _restore_trace_context(agent_headers):
+                with mlflow.start_span("policy_guardian", span_type=SpanType.AGENT) as span:
+                    span._span.set_attribute("session.id", campaign_id)
+                    span.set_inputs({"campaign_name": campaign_name, "description": description})
+
+                    result = await validate_policy(campaign_name, description)
+                    if result["approved"]:
+                        await publish_event(campaign_id, "agent_completed", "Policy Guardian", "Campaign approved")
+                        output = {"approved": True, "reason": "", "status": "success"}
+                    else:
+                        await publish_event(campaign_id, "agent_completed", "Policy Guardian", f"Campaign rejected: {result['reason']}")
+                        output = {"approved": False, "reason": result["reason"], "status": "success"}
+                    span.set_outputs(output)
+                    return output
         except Exception as e:
             await publish_event(campaign_id, "agent_error", "Policy Guardian", "Policy check failed", {"error": str(e)})
             return {"approved": True, "reason": "", "status": "error", "error": str(e)}

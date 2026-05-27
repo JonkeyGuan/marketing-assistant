@@ -3,14 +3,19 @@ import json
 import asyncio
 import traceback
 import httpx
+from contextvars import ContextVar
 from typing import TypedDict, Annotated, List
 import operator
+import mlflow
+from mlflow.tracing import get_tracing_context_headers_for_http_request
+
+_auth_header: ContextVar[str] = ContextVar("_auth_header", default="")
 
 from langgraph.graph import StateGraph, START, END
 
 from app.settings import settings
-from app.config_client import brand
-from app.models import (
+from app.vertical_config import brand
+from app.schemas import (
     CampaignRequest, CampaignData, CampaignStatus,
     CustomerProfile, CAMPAIGN_THEMES
 )
@@ -56,7 +61,16 @@ async def call_a2a_agent(agent_url: str, skill: str, params: dict) -> dict:
         ),
     )
     timeout = httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0)
-    config = ClientConfig(httpx_client=httpx.AsyncClient(timeout=timeout))
+    headers = {}
+    auth = _auth_header.get("")
+    if auth:
+        headers["Authorization"] = auth
+    try:
+        trace_headers = get_tracing_context_headers_for_http_request()
+        headers.update(trace_headers)
+    except Exception:
+        pass
+    config = ClientConfig(httpx_client=httpx.AsyncClient(timeout=timeout, headers=headers))
     client = await create_client(agent_url, client_config=config)
 
     try:
@@ -361,7 +375,35 @@ def _make_initial_state(campaign_id: str, campaign) -> CampaignState:
     }
 
 
+def _get_username_from_auth() -> str:
+    auth = _auth_header.get("")
+    if not auth or not auth.startswith("Bearer "):
+        return ""
+    try:
+        import base64
+        payload = auth.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims.get("preferred_username", "")
+    except Exception:
+        return ""
+
+
+def _set_trace_attributes(campaign_id: str, workflow_name: str):
+    mlflow_span = mlflow.get_current_active_span()
+    if mlflow_span:
+        otel_span = mlflow_span._span
+        if otel_span.is_recording():
+            otel_span.set_attribute("session.id", campaign_id)
+            username = _get_username_from_auth()
+            if username:
+                otel_span.set_attribute("user.id", username)
+            otel_span.set_attribute("mlflow.traceName", workflow_name)
+
+
+@mlflow.trace(name="landing_page")
 async def _run_landing_page_workflow(campaign_id: str, campaign):
+    _set_trace_attributes(campaign_id, "landing_page")
     try:
         state = _make_initial_state(campaign_id, campaign)
         workflow = build_landing_page_workflow()
@@ -371,7 +413,6 @@ async def _run_landing_page_workflow(campaign_id: str, campaign):
         campaign.preview_url = final.get("preview_url", "")
         campaign.status = CampaignStatus(final.get("status", "preview_ready"))
         campaign.error_message = final.get("error_message")
-        print(f"[Campaign Director] workflow done: preview_url={campaign.preview_url!r}, status={campaign.status}")
     except Exception as e:
         traceback.print_exc()
         campaign.status = CampaignStatus.FAILED
@@ -379,7 +420,9 @@ async def _run_landing_page_workflow(campaign_id: str, campaign):
     campaigns_store.sync(campaign_id)
 
 
+@mlflow.trace(name="email_preview")
 async def _run_email_preview_workflow(campaign_id: str, campaign):
+    _set_trace_attributes(campaign_id, "email_preview")
     try:
         state = _make_initial_state(campaign_id, campaign)
         state["status"] = campaign.status.value
@@ -400,7 +443,9 @@ async def _run_email_preview_workflow(campaign_id: str, campaign):
     campaigns_store.sync(campaign_id)
 
 
+@mlflow.trace(name="go_live")
 async def _run_go_live_workflow(campaign_id: str, campaign):
+    _set_trace_attributes(campaign_id, "go_live")
     try:
         state = _make_initial_state(campaign_id, campaign)
         state["status"] = "approved"
@@ -470,6 +515,8 @@ class CampaignDirectorAgent:
         if not campaign_id or campaign_id not in campaigns_store:
             return {"error": "Campaign not found"}
         campaign = campaigns_store[campaign_id]
+        if campaign.status in (CampaignStatus.GENERATING, CampaignStatus.PREVIEW_READY):
+            return {"campaign_id": campaign_id, "status": campaign.status.value}
         campaign.status = CampaignStatus.GENERATING
         asyncio.create_task(_run_landing_page_workflow(campaign_id, campaign))
         return {"campaign_id": campaign_id, "status": "generating"}
@@ -479,6 +526,8 @@ class CampaignDirectorAgent:
         if not campaign_id or campaign_id not in campaigns_store:
             return {"error": "Campaign not found"}
         campaign = campaigns_store[campaign_id]
+        if campaign.status in (CampaignStatus.PREPARING_EMAIL, CampaignStatus.EMAIL_READY):
+            return {"campaign_id": campaign_id, "status": campaign.status.value}
         campaign.status = CampaignStatus.PREPARING_EMAIL
         asyncio.create_task(_run_email_preview_workflow(campaign_id, campaign))
         return {"campaign_id": campaign_id, "status": "preparing_email"}
@@ -488,6 +537,8 @@ class CampaignDirectorAgent:
         if not campaign_id or campaign_id not in campaigns_store:
             return {"error": "Campaign not found"}
         campaign = campaigns_store[campaign_id]
+        if campaign.status in (CampaignStatus.DEPLOYING, CampaignStatus.LIVE):
+            return {"campaign_id": campaign_id, "status": campaign.status.value}
         campaign.status = CampaignStatus.DEPLOYING
         asyncio.create_task(_run_go_live_workflow(campaign_id, campaign))
         return {"campaign_id": campaign_id, "status": "deploying"}

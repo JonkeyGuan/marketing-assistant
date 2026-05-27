@@ -7,8 +7,8 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
 from app.settings import settings
-from app.models import CampaignRequest, CampaignTheme, CAMPAIGN_THEMES
-from app.config_client import competitors as vcfg_competitors, brand, get_config, seed_data as vcfg_seed
+from app.schemas import CampaignRequest, CampaignTheme, CAMPAIGN_THEMES
+from app.vertical_config import competitors as vcfg_competitors, brand, get_config, seed_data as vcfg_seed
 
 app = Flask(__name__)
 CORS(app)
@@ -104,7 +104,31 @@ def check_guardrails(campaign_name: str, description: str) -> dict:
     return {"passed": True, "layer": None, "title": "", "reason": "", "guidance": "", "details": {}}
 
 
-def call_director_a2a_sync(skill: str, params: dict) -> dict:
+def _check_role_audience_restriction(target_audience: str, auth_header: str) -> dict | None:
+    import base64 as _b64
+    if not re.search(r"platinum", target_audience, re.IGNORECASE):
+        return None
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    try:
+        token = auth_header.split(" ", 1)[1]
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+        payload = json.loads(_b64.urlsafe_b64decode(payload_b64))
+        roles = payload.get("realm_access", {}).get("roles", [])
+        if "platinum-access" in roles:
+            return None
+        return guardrail_failure(
+            "role_restriction", "Access Restriction",
+            "Insufficient permissions for Platinum tier",
+            "Your role does not permit targeting Platinum-tier members.",
+            "Select a different target audience or contact your administrator for elevated access.",
+        )
+    except Exception:
+        return None
+
+
+def call_director_a2a_sync(skill: str, params: dict, auth_header: str = "") -> dict:
     from a2a.client import create_client, ClientConfig
     from a2a.types import SendMessageRequest, Message, Part, Role
 
@@ -117,7 +141,10 @@ def call_director_a2a_sync(skill: str, params: dict) -> dict:
             ),
         )
         timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
-        config = ClientConfig(httpx_client=httpx.AsyncClient(timeout=timeout))
+        headers = {}
+        if auth_header:
+            headers["Authorization"] = auth_header
+        config = ClientConfig(httpx_client=httpx.AsyncClient(timeout=timeout, headers=headers))
         client = await create_client(settings.CAMPAIGN_DIRECTOR_URL, client_config=config)
         try:
             last_task = None
@@ -180,7 +207,9 @@ def get_vertical_config():
 @app.route("/api/campaigns", methods=["GET"])
 def list_campaigns():
     try:
-        with httpx.Client(timeout=30.0) as client:
+        auth_header = request.headers.get("Authorization", "")
+        headers = {"Authorization": auth_header} if auth_header else {}
+        with httpx.Client(timeout=30.0, headers=headers) as client:
             response = client.get(f"{settings.CAMPAIGN_DIRECTOR_URL}/campaigns")
             if response.status_code != 200:
                 return jsonify({"error": "Failed to fetch campaigns"}), 500
@@ -192,7 +221,9 @@ def list_campaigns():
 @app.route("/api/campaigns/<campaign_id>", methods=["GET"])
 def get_campaign(campaign_id: str):
     try:
-        with httpx.Client(timeout=30.0) as client:
+        auth_header = request.headers.get("Authorization", "")
+        headers = {"Authorization": auth_header} if auth_header else {}
+        with httpx.Client(timeout=30.0, headers=headers) as client:
             response = client.get(f"{settings.CAMPAIGN_DIRECTOR_URL}/campaigns/{campaign_id}")
             if response.status_code == 404:
                 return jsonify({"error": "Campaign not found"}), 404
@@ -205,6 +236,10 @@ def get_campaign(campaign_id: str):
 def validate_campaign():
     try:
         data = request.get_json()
+        auth_header = request.headers.get("Authorization", "")
+        role_check = _check_role_audience_restriction(data.get("target_audience", ""), auth_header)
+        if role_check:
+            return jsonify({"valid": False, "reason": role_check["reason"], "guardrail": role_check}), 200
         name = data.get("campaign_name", "")
         desc = data.get("campaign_description", "")
         result = check_guardrails(name, desc)
@@ -219,10 +254,14 @@ def validate_campaign():
 def create_campaign():
     try:
         data = request.get_json()
+        auth_header = request.headers.get("Authorization", "")
+        role_check = _check_role_audience_restriction(data.get("target_audience", ""), auth_header)
+        if role_check:
+            return jsonify({"error": role_check["reason"], "guardrail_blocked": True, "guardrail": role_check}), 403
         guardrails = check_guardrails(data.get("campaign_name", ""), data.get("campaign_description", ""))
         if not guardrails["passed"]:
             return jsonify({"error": guardrails["reason"], "guardrail_blocked": True, "guardrail": guardrails}), 400
-        result = call_director_a2a_sync("create_campaign", data)
+        result = call_director_a2a_sync("create_campaign", data, auth_header)
         if "error" in result and result["error"]:
             return jsonify(result), 500
         return jsonify(result), 201
@@ -233,7 +272,8 @@ def create_campaign():
 @app.route("/api/campaigns/<campaign_id>/generate", methods=["POST"])
 def generate_landing_page(campaign_id: str):
     try:
-        result = call_director_a2a_sync("generate_landing_page", {"campaign_id": campaign_id})
+        auth_header = request.headers.get("Authorization", "")
+        result = call_director_a2a_sync("generate_landing_page", {"campaign_id": campaign_id}, auth_header)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -242,7 +282,8 @@ def generate_landing_page(campaign_id: str):
 @app.route("/api/campaigns/<campaign_id>/preview-email", methods=["POST"])
 def preview_email(campaign_id: str):
     try:
-        result = call_director_a2a_sync("prepare_email_preview", {"campaign_id": campaign_id})
+        auth_header = request.headers.get("Authorization", "")
+        result = call_director_a2a_sync("prepare_email_preview", {"campaign_id": campaign_id}, auth_header)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -251,7 +292,8 @@ def preview_email(campaign_id: str):
 @app.route("/api/campaigns/<campaign_id>/approve", methods=["POST"])
 def approve_campaign(campaign_id: str):
     try:
-        result = call_director_a2a_sync("go_live", {"campaign_id": campaign_id})
+        auth_header = request.headers.get("Authorization", "")
+        result = call_director_a2a_sync("go_live", {"campaign_id": campaign_id}, auth_header)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -260,7 +302,8 @@ def approve_campaign(campaign_id: str):
 @app.route("/api/campaigns/<campaign_id>", methods=["DELETE"])
 def delete_campaign(campaign_id: str):
     try:
-        result = call_director_a2a_sync("delete_campaign", {"campaign_id": campaign_id})
+        auth_header = request.headers.get("Authorization", "")
+        result = call_director_a2a_sync("delete_campaign", {"campaign_id": campaign_id}, auth_header)
         if "error" in result and result["error"]:
             return jsonify(result), 404
         return jsonify(result)

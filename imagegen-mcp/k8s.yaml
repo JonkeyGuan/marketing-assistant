@@ -9,6 +9,11 @@ data:
   CONFIG_SERVICE_URL: "http://config-service:8081"
   IMAGE_STORAGE_PATH: "/data/images"
   LOG_LEVEL: "INFO"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335"
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335/v1/traces"
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf"
+  MLFLOW_EXPERIMENT_NAME: "marketing-assistant"
+  OTEL_SERVICE_NAME: "imagegen-mcp"
 ---
 apiVersion: v1
 kind: Secret
@@ -30,6 +35,9 @@ metadata:
     app: imagegen-mcp
     app.kubernetes.io/name: imagegen-mcp
     app.kubernetes.io/component: mcp
+    kagenti.io/type: tool
+    kagenti.io/transport: streamable_http
+    protocol.kagenti.io/mcp: ''
 spec:
   replicas: 1
   strategy:
@@ -41,10 +49,14 @@ spec:
     metadata:
       labels:
         app: imagegen-mcp
+        kagenti.io/type: tool
+        kagenti.io/transport: streamable_http
+        protocol.kagenti.io/mcp: ''
     spec:
       containers:
       - name: imagegen-mcp
-        image: quay.io/jonkey/marketing-assistant/imagegen-mcp:1.0
+        image: quay.io/jonkey/marketing-assistant/imagegen-mcp:2.0
+        imagePullPolicy: Always
         ports:
         - containerPort: 8083
           protocol: TCP
@@ -58,22 +70,26 @@ spec:
           mountPath: /data/images
         resources:
           requests:
-            memory: "256Mi"
+            memory: "384Mi"
             cpu: "100m"
           limits:
-            memory: "512Mi"
+            memory: "768Mi"
             cpu: "500m"
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8083
+          failureThreshold: 60
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8083
-          initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8083
-          initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
       - name: image-storage
@@ -99,12 +115,32 @@ metadata:
   name: imagegen-mcp
   labels:
     app: imagegen-mcp
+    kagenti.io/type: tool
+    protocol.kagenti.io/mcp: ''
 spec:
   selector:
     app: imagegen-mcp
   ports:
   - name: http
     port: 8083
+    targetPort: 8083
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: imagegen-mcp-mcp
+  labels:
+    app: imagegen-mcp
+    kagenti.io/type: tool
+    protocol.kagenti.io/mcp: ''
+spec:
+  selector:
+    app: imagegen-mcp
+  ports:
+  - name: mcp
+    port: 8000
     targetPort: 8083
     protocol: TCP
   type: ClusterIP

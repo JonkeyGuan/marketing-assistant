@@ -27,7 +27,10 @@ metadata:
   labels:
     app: mongodb-mcp
     app.kubernetes.io/name: mongodb-mcp
-    app.kubernetes.io/component: agent
+    app.kubernetes.io/component: mcp
+    kagenti.io/type: tool
+    kagenti.io/transport: streamable_http
+    protocol.kagenti.io/mcp: ''
 spec:
   replicas: 1
   selector:
@@ -37,10 +40,14 @@ spec:
     metadata:
       labels:
         app: mongodb-mcp
+        kagenti.io/type: tool
+        kagenti.io/transport: streamable_http
+        protocol.kagenti.io/mcp: ''
     spec:
       containers:
       - name: mongodb-mcp
-        image: quay.io/jonkey/marketing-assistant/mongodb-mcp:1.0
+        image: quay.io/jonkey/marketing-assistant/mongodb-mcp:2.0
+        imagePullPolicy: Always
         ports:
         - containerPort: 8082
           protocol: TCP
@@ -75,12 +82,32 @@ metadata:
   name: mongodb-mcp
   labels:
     app: mongodb-mcp
+    kagenti.io/type: tool
+    protocol.kagenti.io/mcp: ''
 spec:
   selector:
     app: mongodb-mcp
   ports:
   - name: http
     port: 8082
+    targetPort: 8082
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-mcp-mcp
+  labels:
+    app: mongodb-mcp
+    kagenti.io/type: tool
+    protocol.kagenti.io/mcp: ''
+spec:
+  selector:
+    app: mongodb-mcp
+  ports:
+  - name: mcp
+    port: 8000
     targetPort: 8082
     protocol: TCP
   type: ClusterIP

@@ -10,6 +10,9 @@ dependencies = [
     "uvicorn>=0.30.0",
     "fastmcp>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "mlflow>=3",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
 ]
 
 [tool.hatch.build.targets.wheel]

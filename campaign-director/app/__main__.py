@@ -1,3 +1,6 @@
+from app.tracing import setup_telemetry
+setup_telemetry()
+
 import logging
 from app.settings import settings
 
@@ -24,8 +27,11 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 from starlette.requests import Request
 
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
 from app.agent_executor import CampaignDirectorExecutor
-from app.agent import campaigns_store
+from app.agent import campaigns_store, _auth_header
 
 host = "0.0.0.0"
 agent_endpoint = settings.AGENT_ENDPOINT or f"http://localhost:{settings.PORT}"
@@ -79,6 +85,14 @@ async def get_campaign(request: Request):
     return JSONResponse(campaigns_store[campaign_id].model_dump(mode="json"))
 
 
+class AuthCapture(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        token = _auth_header.set(request.headers.get("Authorization", ""))
+        try:
+            return await call_next(request)
+        finally:
+            _auth_header.reset(token)
+
 app = Starlette(
     routes=[
         Route("/healthz", health_check, methods=["GET"]),
@@ -86,8 +100,9 @@ app = Starlette(
         Route("/campaigns", list_campaigns, methods=["GET"]),
         Route("/campaigns/{campaign_id}", get_campaign, methods=["GET"]),
         *create_agent_card_routes(agent_card),
-        *create_jsonrpc_routes(handler, rpc_url="/"),
+        *create_jsonrpc_routes(handler, rpc_url="/", enable_v0_3_compat=True),
     ],
+    middleware=[Middleware(AuthCapture)],
 )
 
 if __name__ == "__main__":

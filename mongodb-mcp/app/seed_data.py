@@ -1,7 +1,7 @@
 import os
 import time
 
-from app.config_client import seed_data
+from app.vertical_config import seed_data
 
 _seed = seed_data()
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")

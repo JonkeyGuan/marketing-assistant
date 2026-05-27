@@ -5,9 +5,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM registry.access.redhat.com/ubi9/nodejs-18-minimal:latest
 
-RUN microdnf install -y nodejs --nodocs && microdnf clean all
+USER 0
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY server.js package.json ./

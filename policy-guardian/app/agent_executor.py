@@ -8,6 +8,14 @@ from a2a.types import Task, TaskState, TaskStatus, Part
 from app.agent import PolicyGuardianAgent
 
 
+def get_a2a_agent_headers(context: RequestContext) -> dict:
+    agent_headers = (getattr(context.call_context, "state", {}) or {}).get("headers", {})
+    if not agent_headers:
+        from app.tracing import get_trace_headers
+        agent_headers = get_trace_headers()
+    return agent_headers
+
+
 class PolicyGuardianExecutor(AgentExecutor):
     def __init__(self):
         self.agent = PolicyGuardianAgent()
@@ -32,11 +40,16 @@ class PolicyGuardianExecutor(AgentExecutor):
                 params = json.loads(user_input)
             except (json.JSONDecodeError, TypeError):
                 params = {"campaign_name": user_input, "campaign_description": user_input}
-            result = await self.agent.validate(params)
+            agent_headers = get_a2a_agent_headers(context)
+            result = await self.agent.validate(params, agent_headers)
             result_json = json.dumps(result, ensure_ascii=False)
 
             await updater.add_artifact([Part(text=result_json)])
-            msg = updater.new_agent_message([Part(text="Policy check complete.")])
+            if result.get("approved"):
+                summary = "APPROVED"
+            else:
+                summary = f"REJECTED: {result.get('reason', 'Policy violation')}"
+            msg = updater.new_agent_message([Part(text=summary)])
             await updater.complete(message=msg)
         except Exception as e:
             msg = updater.new_agent_message([Part(text=f"Policy check failed: {e}")])

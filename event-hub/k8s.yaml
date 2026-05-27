@@ -28,7 +28,7 @@ spec:
     spec:
       containers:
       - name: event-hub
-        image: quay.io/jonkey/marketing-assistant/event-hub:1.0
+        image: quay.io/jonkey/marketing-assistant/event-hub:2.0
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

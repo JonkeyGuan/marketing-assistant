@@ -32,7 +32,8 @@ spec:
     spec:
       containers:
       - name: campaign-api
-        image: quay.io/jonkey/marketing-assistant/campaign-api:1.0
+        image: quay.io/jonkey/marketing-assistant/campaign-api:2.0
+        imagePullPolicy: Always
         ports:
         - containerPort: 8089
           protocol: TCP
@@ -41,22 +42,26 @@ spec:
             name: campaign-api-config
         resources:
           requests:
-            memory: "256Mi"
+            memory: "384Mi"
             cpu: "100m"
           limits:
-            memory: "512Mi"
+            memory: "768Mi"
             cpu: "500m"
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8089
+          failureThreshold: 60
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8089
-          initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8089
-          initialDelaySeconds: 5
           periodSeconds: 5
 ---
 apiVersion: v1

@@ -10,10 +10,6 @@ def _fetch_config() -> dict:
     return resp.json()
 
 
-def get_config() -> dict:
-    return _fetch_config()
-
-
 def brand(key: str, default: str = "") -> str:
     return _fetch_config().get("brand", {}).get(key, default)
 

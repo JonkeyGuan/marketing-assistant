@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     DEV_NAMESPACE: str = "marketing-dev"
     PROD_NAMESPACE: str = "marketing-prod"
     APP_NAMESPACE: str = "marketing"
-    LANDING_IMAGE: str = "quay.io/rh-ee-dayeo/marketing-assistant:campaign-landing"
+    LANDING_IMAGE: str = "quay.io/jonkey/marketing-assistant/campaign-landing:2.0"
 
     CONFIG_SERVICE_URL: str = "http://localhost:8081"
     LOG_LEVEL: str = "INFO"
