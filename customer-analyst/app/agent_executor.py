@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import traceback
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -45,6 +46,15 @@ class CustomerAnalystExecutor(AgentExecutor):
             except (json.JSONDecodeError, TypeError):
                 params = {"user_prompt": user_input, "campaign_id": "chat"}
             agent_headers = get_a2a_agent_headers(context)
+
+            auth_headers = {}
+            mongodb_token = os.environ.get("MONGODB_TOKEN", "")
+            if mongodb_token:
+                auth_headers["Authorization"] = f"Bearer {mongodb_token}"
+            elif agent_headers.get("authorization"):
+                auth_headers["Authorization"] = agent_headers["authorization"]
+            self.agent.headers = auth_headers
+
             result = await self.agent.get_customers(params, agent_headers)
             result_json = json.dumps(result, ensure_ascii=False, default=str)
 

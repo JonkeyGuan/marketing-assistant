@@ -142,9 +142,14 @@ async def fake_call_mcp_tool(tool_name: str, arguments: dict) -> list:
     return []
 
 
-async def call_mcp_tool(tool_name: str, arguments: dict) -> list:
+async def call_mcp_tool(tool_name: str, arguments: dict, auth_headers: dict = None) -> list:
     from fastmcp import Client
-    async with Client(f"{settings.MONGODB_MCP_URL}/mcp") as mcp_client:
+    token = None
+    if auth_headers:
+        auth_value = auth_headers.get("Authorization", "")
+        if auth_value.startswith("Bearer "):
+            token = auth_value.removeprefix("Bearer ").strip()
+    async with Client(f"{settings.MONGODB_MCP_URL}/mcp", auth=token) as mcp_client:
         result = await mcp_client.call_tool(tool_name, arguments)
         return json.loads(result.content[0].text) if result and result.content else []
 
@@ -165,7 +170,7 @@ def _keyword_select_tool(target_audience: str, limit: int) -> tuple[str, str]:
         return "get_all_vip_customers", json.dumps({"limit": limit})
 
 
-async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "", limit: int = 50) -> tuple[list, str]:
+async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "", limit: int = 50, auth_headers: dict = None) -> tuple[list, str]:
     if is_mock_mode():
         tool_name, tool_args_str = _keyword_select_tool(target_audience or user_prompt, limit)
         arguments = json.loads(tool_args_str)
@@ -210,7 +215,7 @@ async def _llm_select_and_call_tool(user_prompt: str, target_audience: str = "",
         arguments["limit"] = limit
 
     logger.info("LLM selected MCP tool=%s arguments=%s", tool_call_name, json.dumps(arguments, default=str))
-    result = await call_mcp_tool(tool_call_name, arguments)
+    result = await call_mcp_tool(tool_call_name, arguments, auth_headers=auth_headers)
     recipient_type = "prospects" if tool_call_name == "get_prospects" else "customers"
     return result, recipient_type
 
@@ -223,6 +228,9 @@ def _restore_trace_context(headers):
 
 
 class CustomerAnalystAgent:
+    def __init__(self):
+        self.headers = {}
+
     async def get_customers(self, params: dict, agent_headers: dict = None) -> dict:
         user_prompt = params.get("user_prompt")
         campaign_id = params.get("campaign_id", "unknown")
@@ -240,10 +248,10 @@ class CustomerAnalystAgent:
                     await publish_event(campaign_id, "workflow_status", "Customer Analyst", "Analyzing target audience...")
 
                     if user_prompt:
-                        customers_data, recipient_type = await _llm_select_and_call_tool(user_prompt, limit=limit)
+                        customers_data, recipient_type = await _llm_select_and_call_tool(user_prompt, limit=limit, auth_headers=self.headers)
                     else:
                         prompt = f"Retrieve customers for this target audience: {target_audience} (limit: {limit})"
-                        customers_data, recipient_type = await _llm_select_and_call_tool(prompt, target_audience, limit)
+                        customers_data, recipient_type = await _llm_select_and_call_tool(prompt, target_audience, limit, auth_headers=self.headers)
 
                     customers = [
                         CustomerProfile(
