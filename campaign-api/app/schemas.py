@@ -1,5 +1,7 @@
 from enum import Enum
 
+from pydantic import BaseModel, Field
+
 
 class CampaignTheme(str, Enum):
     LUXURY_GOLD = "luxury_gold"
@@ -54,9 +56,6 @@ CAMPAIGN_THEMES = {
         "button_text": "#064E3B"
     }
 }
-
-
-from pydantic import BaseModel, Field
 
 
 class CampaignRequest(BaseModel):

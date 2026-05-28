@@ -1,4 +1,5 @@
 import logging
+
 from app.settings import settings
 
 level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
@@ -13,11 +14,12 @@ class _HealthFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_HealthFilter())
 
-from app.seed_data import seed
+from app.seed_data import init, seed
 from app.server import app
 
 if __name__ == "__main__":
     import uvicorn
+    init()
     seed()
     print(f"[MongoDB MCP] Starting on 0.0.0.0:{settings.PORT}")
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)

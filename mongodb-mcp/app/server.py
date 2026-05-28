@@ -10,12 +10,12 @@ from fastmcp.server.dependencies import get_http_headers
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from starlette.applications import Starlette
-from starlette.routing import Route, Mount
-from starlette.responses import JSONResponse
 from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
-from app.settings import settings
 from app.seed_data import CUSTOMERS as MOCK_CUSTOMERS, PROSPECTS as MOCK_PROSPECTS
+from app.settings import settings
 
 logger = logging.getLogger("mongodb_mcp")
 

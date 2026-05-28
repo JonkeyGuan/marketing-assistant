@@ -63,17 +63,21 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8082
+          failureThreshold: 60
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8082
-          initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8082
-          initialDelaySeconds: 5
           periodSeconds: 5
 ---
 apiVersion: v1

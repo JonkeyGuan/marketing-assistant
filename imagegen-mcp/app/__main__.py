@@ -1,5 +1,7 @@
 import logging
+
 import uvicorn
+
 from app.settings import settings
 from app.tracing import setup_telemetry
 

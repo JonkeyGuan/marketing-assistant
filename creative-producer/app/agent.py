@@ -1,15 +1,16 @@
-import os
 import json
-import httpx
+import os
 import traceback
 from contextlib import nullcontext
-from openai import AsyncOpenAI
+
+import httpx
 import mlflow
 from mlflow.entities import SpanType
+from openai import AsyncOpenAI
 
-from app.settings import settings
 from app.schemas import CAMPAIGN_THEMES
-from app.vertical_config import prompt as vcfg_prompt, brand, themes as vcfg_themes
+from app.settings import settings
+from app.vertical_config import brand, prompt as vcfg_prompt, themes as vcfg_themes
 
 BASE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "base_template.html")
 

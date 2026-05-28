@@ -1,13 +1,15 @@
 import json
 import logging
-import httpx
 from contextlib import nullcontext
-from openai import AsyncOpenAI
+
+import httpx
 import mlflow
 from mlflow.entities import SpanType
+from openai import AsyncOpenAI
+
+from app.schemas import CustomerProfile, GetTargetCustomersOutput
 from app.settings import settings
 from app.vertical_config import prompt as vcfg_prompt, seed_data
-from app.schemas import CustomerProfile, GetTargetCustomersOutput
 
 logger = logging.getLogger(__name__)
 

@@ -1,21 +1,21 @@
-import uuid
 import base64
 import logging
+import uuid
 from collections import OrderedDict
 from pathlib import Path
 
 import httpx
-from openai import AsyncOpenAI
-
-logger = logging.getLogger("imagegen_mcp")
 from fastmcp import FastMCP
+from openai import AsyncOpenAI
 from starlette.applications import Starlette
-from starlette.routing import Route, Mount
-from starlette.responses import JSONResponse, Response
 from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Mount, Route
 
 from app.settings import settings
 from app.vertical_config import prompt as vcfg_prompt
+
+logger = logging.getLogger("imagegen_mcp")
 
 mcp = FastMCP("Image Generation MCP")
 

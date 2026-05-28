@@ -1,8 +1,18 @@
-from app.tracing import setup_telemetry
-setup_telemetry()
-
 import logging
+
+import uvicorn
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
+from a2a.server.routes.agent_card_routes import create_agent_card_routes
+from a2a.types import AgentCard, AgentSkill, AgentCapabilities, AgentInterface
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+
 from app.settings import settings
+from app.agent_executor import CustomerAnalystExecutor
+from app.tracing import setup_telemetry, TraceContextMiddleware
 
 level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
 logging.basicConfig(level=level, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
@@ -15,19 +25,7 @@ class _HealthFilter(logging.Filter):
 
 
 logging.getLogger("uvicorn.access").addFilter(_HealthFilter())
-
-import uvicorn
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-from a2a.server.routes.agent_card_routes import create_agent_card_routes
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities, AgentInterface
-from starlette.applications import Starlette
-from starlette.routing import Route
-from starlette.responses import JSONResponse
-
-from app.agent_executor import CustomerAnalystExecutor
-from app.tracing import TraceContextMiddleware
+setup_telemetry()
 
 host = "0.0.0.0"
 agent_endpoint = settings.AGENT_ENDPOINT or f"http://localhost:{settings.PORT}"

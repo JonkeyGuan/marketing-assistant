@@ -1,13 +1,14 @@
+import asyncio
+import json
 import re
 import uuid
-import json
-import asyncio
+
 import httpx
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
-from app.settings import settings
 from app.schemas import CampaignRequest, CampaignTheme, CAMPAIGN_THEMES
+from app.settings import settings
 from app.vertical_config import competitors as vcfg_competitors, brand, get_config, seed_data as vcfg_seed
 
 app = Flask(__name__)

@@ -3,11 +3,28 @@ import time
 
 from app.vertical_config import seed_data
 
-_seed = seed_data()
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
-MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", _seed.get("database_name", "casino_crm"))
-CUSTOMERS = _seed.get("customers", [])
-PROSPECTS = _seed.get("prospects", [])
+MONGODB_DATABASE = "casino_crm"
+CUSTOMERS = []
+PROSPECTS = []
+
+
+def init():
+    global MONGODB_DATABASE
+    # Retry to tolerate ztunnel/ambient mesh network readiness delay
+    for attempt in range(5):
+        try:
+            _seed = seed_data()
+            break
+        except Exception:
+            if attempt < 4:
+                print(f"[Seed] Config fetch attempt {attempt + 1}/5 failed, retrying in 2s...")
+                time.sleep(2)
+            else:
+                raise
+    MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", _seed.get("database_name", "casino_crm"))
+    CUSTOMERS[:] = _seed.get("customers", [])
+    PROSPECTS[:] = _seed.get("prospects", [])
 
 
 def seed():
@@ -51,4 +68,5 @@ def seed():
 
 
 if __name__ == "__main__":
+    init()
     seed()

@@ -1,25 +1,25 @@
-import uuid
-import json
 import asyncio
-import traceback
-import httpx
-from contextvars import ContextVar
-from typing import TypedDict, Annotated, List
+import json
 import operator
+import traceback
+import uuid
+from contextvars import ContextVar
+from typing import Annotated, List, TypedDict
+
+import httpx
 import mlflow
+from langgraph.graph import END, START, StateGraph
 from mlflow.tracing import get_tracing_context_headers_for_http_request
 
-_auth_header: ContextVar[str] = ContextVar("_auth_header", default="")
-
-from langgraph.graph import StateGraph, START, END
-
-from app.settings import settings
-from app.vertical_config import brand
+from app.campaign_store import CampaignStore
 from app.schemas import (
     CampaignRequest, CampaignData, CampaignStatus,
     CustomerProfile, CAMPAIGN_THEMES
 )
-from app.campaign_store import CampaignStore
+from app.settings import settings
+from app.vertical_config import brand
+
+_auth_header: ContextVar[str] = ContextVar("_auth_header", default="")
 
 campaigns_store = CampaignStore()
 campaigns_store.init(settings.CAMPAIGN_STORAGE_PATH)
@@ -112,7 +112,7 @@ async def publish_event(campaign_id: str, event_type: str, agent: str, task: str
                 timeout=5.0
             )
     except Exception as e:
-        print(f"[Campaign Director] Failed to publish event: {e}")
+        print(f"[Campaign Director] Failed to publish event: {type(e).__name__}: {e}")
 
 
 async def _cleanup_k8s_resources(campaign_id: str):

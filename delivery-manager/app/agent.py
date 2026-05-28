@@ -1,21 +1,23 @@
+import datetime
 import json
 import uuid
-import datetime
-import httpx
-from typing import List
 from contextlib import nullcontext
-from openai import AsyncOpenAI
+from typing import List
+
+import httpx
 import mlflow
 from mlflow.entities import SpanType
-from app.settings import settings
-from app.vertical_config import prompt as vcfg_prompt, brand
+from openai import AsyncOpenAI
+
 from app.schemas import (
     CustomerProfile,
-    GenerateEmailInput, GenerateEmailOutput,
     DeployPreviewInput, DeployPreviewOutput,
     DeployProductionInput, DeployProductionOutput,
+    GenerateEmailInput, GenerateEmailOutput,
     SendEmailsInput, SendEmailsOutput,
 )
+from app.settings import settings
+from app.vertical_config import brand, prompt as vcfg_prompt
 
 _llm_client = AsyncOpenAI(
     base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
