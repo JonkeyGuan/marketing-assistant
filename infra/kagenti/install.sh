@@ -137,6 +137,29 @@ for doc in yaml.safe_load_all(sys.stdin):
 " | oc apply -f - 2>/dev/null || true
 fi
 
+echo "  Enabling IstioCNI ambient reconciliation (fixes HBONE after cluster restart)..."
+oc patch istiocni default --type=merge -p '{
+  "spec": {
+    "values": {
+      "cni": {
+        "ambient": {"reconcileIptablesOnStartup": true},
+        "istioOwnedCNIConfig": true
+      }
+    }
+  }
+}' 2>/dev/null || true
+
+# OSSM 3.3.3 CRD doesn't expose ambient.enableAmbientDetectionRetry (available since Istio 1.28.4,
+# default true in 1.29). Patch the DaemonSet env directly — explicit env overrides envFrom ConfigMap
+# and survives operator reconciliation. Without this, CNI agent gives up on first netns cache miss
+# after cluster restart, leaving sidecar pods without ztunnel HBONE rules.
+echo "  Enabling ambient detection retry on istio-cni DaemonSet..."
+if ! oc get daemonset istio-cni-node -n istio-cni -o jsonpath='{.spec.template.spec.containers[?(@.name=="install-cni")].env[*].name}' 2>/dev/null | grep -q ENABLE_AMBIENT_DETECTION_RETRY; then
+  oc patch daemonset istio-cni-node -n istio-cni --type=json \
+    -p '[{"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"ENABLE_AMBIENT_DETECTION_RETRY","value":"true"}}]' \
+    2>/dev/null || true
+fi
+
 echo "  Waiting for Keycloak to become ready..."
 oc wait --for=condition=Ready pod -l app=keycloak \
   -n "$KC_NAMESPACE" --timeout=600s 2>/dev/null || \
@@ -281,6 +304,10 @@ fi
 # Phase 7: Post-install fixups
 # ---------------------------------------------------------------------------
 echo "[7/9] Applying post-install fixups..."
+
+# Deploy ambient mesh reconciler CronJob (auto-fixes pods that lose ztunnel after cluster reboot)
+echo "  Deploying ambient mesh reconciler CronJob..."
+oc apply -f "$SCRIPT_DIR/ambient-reconciler.yaml" 2>/dev/null || true
 
 # Fix Kiali URL in kagenti-ui-config (route processor doesn't know about Kiali)
 echo "  Patching Kiali URL in UI config..."

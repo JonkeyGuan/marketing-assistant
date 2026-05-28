@@ -1,0 +1,148 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ambient-reconciler
+  namespace: kagenti-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ambient-reconciler
+rules:
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "patch"]
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ambient-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ambient-reconciler
+subjects:
+- kind: ServiceAccount
+  name: ambient-reconciler
+  namespace: kagenti-system
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ambient-reconciler
+  namespace: kagenti-system
+  labels:
+    app: ambient-reconciler
+spec:
+  schedule: "*/3 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 180
+      template:
+        metadata:
+          labels:
+            app: ambient-reconciler
+        spec:
+          serviceAccountName: ambient-reconciler
+          restartPolicy: Never
+          containers:
+          - name: reconciler
+            image: quay.io/openshift/origin-cli:latest
+            command: ["/bin/bash", "-c"]
+            args:
+            - |
+              set -uo pipefail
+
+              ZTUNNEL_NS="istio-ztunnel"
+              NAMESPACES="kagenti-system marketing"
+              PORT_HEX="3AA0"
+
+              # --- Gate: ztunnel must be fully ready ---
+              DESIRED=$(kubectl get daemonset ztunnel -n "$ZTUNNEL_NS" \
+                -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null)
+              READY=$(kubectl get daemonset ztunnel -n "$ZTUNNEL_NS" \
+                -o jsonpath='{.status.numberReady}' 2>/dev/null)
+
+              if [ -z "$DESIRED" ] || [ -z "$READY" ] || [ "$DESIRED" != "$READY" ]; then
+                echo "ztunnel not fully ready ($READY/$DESIRED) — skipping"
+                exit 0
+              fi
+              echo "ztunnel ready ($READY/$DESIRED)"
+
+              ACTED=false
+
+              for NS in $NAMESPACES; do
+                if ! kubectl get namespace "$NS" &>/dev/null; then
+                  continue
+                fi
+
+                STALE_OWNERS=""
+
+                while IFS='|' read -r POD OWNER_KIND OWNER_NAME AMBIENT; do
+                  [ "$AMBIENT" != "enabled" ] && continue
+
+                  HAS_ZTUNNEL=$(kubectl exec "$POD" -n "$NS" -- \
+                    cat /proc/net/tcp 2>/dev/null | grep -qi ":${PORT_HEX} " && echo "yes" || echo "")
+
+                  if [ "$HAS_ZTUNNEL" != "yes" ]; then
+                    echo "[$NS] $POD missing ztunnel (owner: $OWNER_KIND/$OWNER_NAME)"
+                    STALE_OWNERS="$STALE_OWNERS $OWNER_KIND/$OWNER_NAME"
+                  fi
+                done < <(kubectl get pods -n "$NS" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.metadata.ownerReferences[0].kind}{"|"}{.metadata.ownerReferences[0].name}{"|"}{.metadata.annotations.ambient\.istio\.io/redirection}{"\n"}{end}' 2>/dev/null)
+
+                RESTARTED=""
+                for OWNER in $STALE_OWNERS; do
+                  echo "$RESTARTED" | grep -q "$OWNER" && continue
+                  RESTARTED="$RESTARTED $OWNER"
+
+                  KIND="${OWNER%%/*}"
+                  NAME="${OWNER##*/}"
+
+                  case "$KIND" in
+                    ReplicaSet)
+                      DEP=$(kubectl get rs "$NAME" -n "$NS" \
+                        -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)
+                      if [ -n "$DEP" ]; then
+                        echo "[$NS] restarting deployment/$DEP"
+                        kubectl rollout restart "deployment/$DEP" -n "$NS"
+                        ACTED=true
+                      fi
+                      ;;
+                    StatefulSet)
+                      echo "[$NS] restarting statefulset/$NAME"
+                      kubectl rollout restart "statefulset/$NAME" -n "$NS"
+                      ACTED=true
+                      ;;
+                  esac
+                done
+              done
+
+              if [ "$ACTED" = "true" ]; then
+                echo "reconciliation triggered"
+              else
+                echo "all ambient pods healthy — no action needed"
+              fi
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                cpu: 100m
+                memory: 64Mi

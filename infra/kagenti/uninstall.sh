@@ -25,6 +25,8 @@ echo "[3/6] Uninstalling kagenti-deps..."
 helm uninstall kagenti-deps -n "$NAMESPACE" 2>/dev/null || echo "  (not installed)"
 
 echo "[4/6] Cleaning up cluster-scoped resources..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+oc delete -f "$SCRIPT_DIR/ambient-reconciler.yaml" --ignore-not-found 2>/dev/null || true
 oc delete clusterrole,clusterrolebinding -l app.kubernetes.io/instance=kagenti --ignore-not-found 2>/dev/null || true
 oc delete clusterrole,clusterrolebinding -l app.kubernetes.io/instance=kagenti-deps --ignore-not-found 2>/dev/null || true
 oc delete mutatingwebhookconfiguration,validatingwebhookconfiguration -l app.kubernetes.io/instance=kagenti --ignore-not-found 2>/dev/null || true
