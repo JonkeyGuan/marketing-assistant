@@ -515,7 +515,7 @@ class CampaignDirectorAgent:
         if not campaign_id or campaign_id not in campaigns_store:
             return {"error": "Campaign not found"}
         campaign = campaigns_store[campaign_id]
-        if campaign.status in (CampaignStatus.GENERATING, CampaignStatus.PREVIEW_READY):
+        if campaign.status == CampaignStatus.GENERATING:
             return {"campaign_id": campaign_id, "status": campaign.status.value}
         campaign.status = CampaignStatus.GENERATING
         asyncio.create_task(_run_landing_page_workflow(campaign_id, campaign))
@@ -526,7 +526,7 @@ class CampaignDirectorAgent:
         if not campaign_id or campaign_id not in campaigns_store:
             return {"error": "Campaign not found"}
         campaign = campaigns_store[campaign_id]
-        if campaign.status in (CampaignStatus.PREPARING_EMAIL, CampaignStatus.EMAIL_READY):
+        if campaign.status == CampaignStatus.PREPARING_EMAIL:
             return {"campaign_id": campaign_id, "status": campaign.status.value}
         campaign.status = CampaignStatus.PREPARING_EMAIL
         asyncio.create_task(_run_email_preview_workflow(campaign_id, campaign))
@@ -537,7 +537,7 @@ class CampaignDirectorAgent:
         if not campaign_id or campaign_id not in campaigns_store:
             return {"error": "Campaign not found"}
         campaign = campaigns_store[campaign_id]
-        if campaign.status in (CampaignStatus.DEPLOYING, CampaignStatus.LIVE):
+        if campaign.status == CampaignStatus.DEPLOYING:
             return {"campaign_id": campaign_id, "status": campaign.status.value}
         campaign.status = CampaignStatus.DEPLOYING
         asyncio.create_task(_run_go_live_workflow(campaign_id, campaign))

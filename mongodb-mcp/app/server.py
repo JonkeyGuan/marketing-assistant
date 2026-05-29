@@ -94,14 +94,19 @@ def filter_customers_by_user_perm(customers: list) -> list:
 
     username = auth_ctx["preferred_username"]
     roles = auth_ctx.get("roles", [])
+    scope = auth_ctx.get("scope", "") or ""
     platinum_role, platinum_tier = _get_tier_config()
-    logger.info("JWT claims: preferred_username=%s roles=%s", username, roles)
+    logger.info("JWT claims: preferred_username=%s roles=%s scope=%s", username, roles, scope[:80])
 
     if platinum_role in roles:
-        logger.info("%s has '%s' role — full access", username, platinum_role)
+        logger.info("%s has '%s' role (realm_access) — full access", username, platinum_role)
         return customers
 
-    logger.info("%s lacks '%s' role — filtering out %s members", username, platinum_role, platinum_tier)
+    if platinum_role in scope.split():
+        logger.info("%s has '%s' scope — full access", username, platinum_role)
+        return customers
+
+    logger.info("%s lacks '%s' role/scope — filtering out %s members", username, platinum_role, platinum_tier)
     return [c for c in customers if c.get("tier") != platinum_tier]
 
 

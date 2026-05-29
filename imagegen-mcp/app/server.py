@@ -60,12 +60,13 @@ def _load_image_from_disk(image_id: str) -> bytes | None:
     return None
 
 
-_llm_client = AsyncOpenAI(
-    base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
-    api_key=settings.MODEL_API_KEY or "unused",
-    timeout=120.0,
-    http_client=httpx.AsyncClient(verify=False),
-)
+def _get_llm_client():
+    return AsyncOpenAI(
+        base_url=settings.MODEL_ENDPOINT or "http://localhost:11434/v1",
+        api_key=settings.MODEL_API_KEY or "unused",
+        timeout=120.0,
+        http_client=httpx.AsyncClient(verify=False),
+    )
 
 
 def is_mock_mode() -> bool:
@@ -137,7 +138,8 @@ def _build_prompt(campaign_name: str, hotel_name: str, theme: str, description: 
 
 
 async def _call_imagegen_api(prompt: str, width: int = 1024, height: int = 576) -> bytes:
-    response = await _llm_client.images.generate(
+    client = _get_llm_client()
+    response = await client.images.generate(
         model=settings.MODEL_NAME,
         prompt=prompt,
         size=f"{width}x{height}",

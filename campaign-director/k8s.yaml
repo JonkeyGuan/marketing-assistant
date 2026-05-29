@@ -23,6 +23,7 @@ data:
   OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf"
   MLFLOW_EXPERIMENT_NAME: "marketing-assistant"
   OTEL_SERVICE_NAME: "campaign-director"
+  OTEL_METRICS_EXPORTER: "none"
 ---
 apiVersion: apps/v1
 kind: Deployment

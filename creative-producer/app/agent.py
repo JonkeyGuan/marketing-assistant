@@ -155,10 +155,11 @@ def merge_template(template: str, theme_config: dict, style_block: str, content:
     return html
 
 
-async def generate_hero_image(campaign_name: str, hotel_name: str, theme: str, description: str = "") -> str | None:
+async def generate_hero_image(campaign_name: str, hotel_name: str, theme: str, description: str = "", auth_header: str = "") -> str | None:
     try:
         from fastmcp import Client
-        async with Client(f"{settings.IMAGEGEN_MCP_URL}/mcp") as mcp_client:
+        token = auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else None
+        async with Client(f"{settings.IMAGEGEN_MCP_URL}/mcp", auth=token) as mcp_client:
             result = await mcp_client.call_tool("generate_campaign_image", {
                 "campaign_name": campaign_name,
                 "hotel_name": hotel_name,
@@ -409,7 +410,8 @@ class CreativeProducerAgent:
                         campaign_name=params["campaign_name"],
                         hotel_name=params["hotel_name"],
                         theme=params["theme"],
-                        description=params["campaign_description"]
+                        description=params["campaign_description"],
+                        auth_header=agent_headers.get("authorization", "") if agent_headers else ""
                     )
 
                     if hero_image_url:

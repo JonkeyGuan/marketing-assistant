@@ -16,6 +16,7 @@ data:
   OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf"
   MLFLOW_EXPERIMENT_NAME: "marketing-assistant"
   OTEL_SERVICE_NAME: "creative-producer"
+  OTEL_METRICS_EXPORTER: "none"
 ---
 apiVersion: v1
 kind: Secret

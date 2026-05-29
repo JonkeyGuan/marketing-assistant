@@ -16,6 +16,7 @@ class CampaignStore:
         "email_subject_en", "email_body_en",
         "email_subject_zh", "email_body_zh",
         "customer_count",
+        "customer_list",
     ]
 
     def __init__(self):

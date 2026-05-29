@@ -76,6 +76,29 @@ if [ -n "$KC_AB_ROUTE" ]; then
   oc patch configmap authbridge-config -n "$NAMESPACE" --type=merge \
     -p "{\"data\":{\"ISSUER\":\"https://${KC_AB_ROUTE}/realms/${KC_REALM}\",\"EXPECTED_AUDIENCE\":\"kagenti\",\"JWT_AUDIENCE\":\"kagenti\"}}" \
     2>/dev/null || true
+
+  # Fix spiffe-helper-config: jwt_audience must match Keycloak issuer URL
+  echo "  Patching spiffe-helper-config (jwt_audience)..."
+  KC_ISSUER="https://${KC_AB_ROUTE}/realms/${KC_REALM}"
+  oc create configmap spiffe-helper-config -n "$NAMESPACE" \
+    --from-literal="helper.conf=agent_address = \"/spiffe-workload-api/spire-agent.sock\"
+cmd = \"\"
+cmd_args = \"\"
+svid_file_name = \"/opt/svid.pem\"
+svid_key_file_name = \"/opt/svid_key.pem\"
+svid_bundle_file_name = \"/opt/svid_bundle.pem\"
+cert_file_mode = 0644
+key_file_mode = 0640
+jwt_svids = [{jwt_audience=\"${KC_ISSUER}\", jwt_svid_file_name=\"/opt/jwt_svid.token\"}]
+jwt_svid_file_mode = 0644
+include_federated_domains = true" \
+    --dry-run=client -o yaml | oc apply -f - -n "$NAMESPACE" 2>/dev/null
+
+  # authproxy-routes: outbound token exchange routes (disabled)
+  # Token exchange is not enabled by default — JWT passthrough preserves
+  # realm_access.roles for RBAC (e.g. platinum-access filtering).
+  # To enable SPIFFE token exchange, create authproxy-routes ConfigMap
+  # with per-agent routes. See infra/README.md for details.
 fi
 
 # ---------------------------------------------------------------------------
@@ -240,7 +263,7 @@ else
 
     # --- Create realm roles ---
     echo "  Creating realm roles..."
-    for ROLE_DEF in "kagenti-viewer:View agents and tools in KAgenti UI" "platinum-access:Access to platinum-tier customer data"; do
+    for ROLE_DEF in "kagenti-viewer:View agents and tools in kagenti UI" "platinum-access:Access to platinum-tier customer data"; do
       ROLE_NAME=${ROLE_DEF%%:*}; ROLE_DESC=${ROLE_DEF#*:}
       curl -sk -X POST "${KC_REALM_API}/roles" \
         -H "Authorization: Bearer ${KC_TOKEN}" \
@@ -313,9 +336,24 @@ window.__KEYCLOAK_CLIENT_ID__ = \"marketing-ui\";" \
     # Restart frontend to pick up new config
     oc rollout restart deployment/frontend -n "$NAMESPACE" 2>/dev/null || true
 
+    # --- Enable token exchange on marketing-ui (subject_token source) ---
+    echo "  Enabling token exchange on marketing-ui..."
+    MKT_CLI_UUID=$(curl -sk -H "Authorization: Bearer ${KC_TOKEN}" \
+      "${KC_REALM_API}/clients?clientId=marketing-ui" 2>/dev/null | \
+      python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0]['id'] if c else '')" 2>/dev/null || echo "")
+    if [ -n "$MKT_CLI_UUID" ]; then
+      curl -sk -H "Authorization: Bearer ${KC_TOKEN}" \
+        "${KC_REALM_API}/clients/${MKT_CLI_UUID}" -o /tmp/kc_mktui.json 2>/dev/null
+      python3 -c "import json; c=json.load(open('/tmp/kc_mktui.json')); c.setdefault('attributes',{})['standard.token.exchange.enabled']='true'; json.dump(c,open('/tmp/kc_mktui2.json','w'))"
+      curl -sk -X PUT "${KC_REALM_API}/clients/${MKT_CLI_UUID}" \
+        -H "Authorization: Bearer ${KC_TOKEN}" -H "Content-Type: application/json" \
+        -d @/tmp/kc_mktui2.json 2>/dev/null
+      echo "    done"
+    fi
+
     echo ""
     echo "  SSO configured:"
-    echo "    Client: marketing-ui (public, PKCE)"
+    echo "    Client: marketing-ui (public, PKCE, token-exchange enabled)"
     echo "    Users: alice/alice (platinum), bob/bob (no platinum), admin (from install.sh)"
     echo "    Roles: admin, kagenti-viewer (all), platinum-access (alice only)"
   fi
