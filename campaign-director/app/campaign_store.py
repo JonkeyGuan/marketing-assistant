@@ -55,6 +55,8 @@ class CampaignStore:
                 data[field] = val.isoformat()
             elif hasattr(val, "value"):
                 data[field] = val.value
+            elif isinstance(val, list):
+                data[field] = [item.model_dump() if hasattr(item, "model_dump") else item for item in val]
             else:
                 data[field] = val
         return json.dumps(data, ensure_ascii=False)
