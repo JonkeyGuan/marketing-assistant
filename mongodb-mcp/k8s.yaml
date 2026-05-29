@@ -6,7 +6,7 @@ metadata:
     app: mongodb-mcp
 data:
   PORT: "8082"
-  MONGODB_DATABASE: "<TODO>"
+  MONGODB_DATABASE: "casino_crm"
   CONFIG_SERVICE_URL: "http://config-service:8081"
   LOG_LEVEL: "INFO"
 ---
@@ -18,7 +18,7 @@ metadata:
     app: mongodb-mcp
 type: Opaque
 stringData:
-  MONGODB_URI: "<TODO>"
+  MONGODB_URI: "mongodb://mongodb:27017"
 ---
 apiVersion: apps/v1
 kind: Deployment

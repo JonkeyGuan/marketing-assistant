@@ -120,8 +120,15 @@ marketing-assistant/
 ├── campaign-landing/       # Landing page server
 ├── mongodb/                # MongoDB: local run/stop scripts + k8s manifests
 ├── infra/
-│   ├── kagenti/            # Kagenti platform install/uninstall
-│   └── guardrails/         # TrustyAI guardrails (HAP, prompt injection, orchestrator)
+│   ├── README.md           # Infrastructure setup order
+│   ├── models/             # LLM model deployment (vLLM + KServe + HF auto-download)
+│   ├── guardrails/         # TrustyAI guardrails (HAP, prompt injection, orchestrator)
+│   └── kagenti/            # Kagenti platform install/uninstall
+├── deploy.sh               # Deploy application to OpenShift
+├── undeploy.sh             # Remove application from OpenShift
+├── fill-env.sh             # Fill k8s.yaml templates → .k8s.yaml (tokens, domain)
+├── clear-traces.sh         # Clear MLflow tracing data
+├── post-reboot.sh          # Manual ambient mesh reconciliation after cluster reboot
 ├── run.sh                  # Start all services locally
 └── stop.sh                 # Stop all services
 ```
@@ -235,20 +242,27 @@ Traces are visible in the kagenti MLflow UI under the `marketing-assistant` expe
 ### Prerequisites
 
 1. Logged in to OpenShift (`oc login`)
-2. [LLM models](infra/models/) deployed manually to the `models` namespace (Qwen3-32B, Qwen3-Coder-30B, Flux2-Klein-4B)
-3. [Kagenti platform](infra/kagenti/) installed (`infra/kagenti/install.sh`)
-4. [TrustyAI Guardrails](infra/guardrails/) installed (optional, `infra/guardrails/install.sh`)
-5. Container images built and pushed (each service has `build.sh`)
-6. Secrets configured: copy `k8s.yaml` to `.k8s.yaml` per service and fill in `MODEL_ENDPOINT`, `MODEL_API_KEY`, `MONGODB_URI`, `CLUSTER_DOMAIN` etc.
+2. Infrastructure installed in order (see [`infra/README.md`](infra/README.md)):
+   - OpenShift AI (GPU operators, DataScienceCluster)
+   - LLM models (`infra/models/install.sh`)
+   - TrustyAI Guardrails (`infra/guardrails/install.sh`, optional)
+   - Kagenti platform (`infra/kagenti/install.sh`)
+3. Container images built and pushed (each service has `build.sh`)
 
 ### Deploy
 
 ```bash
+# 1. Generate .k8s.yaml from templates (fills MODEL_API_KEY, CLUSTER_DOMAIN, etc.)
+./fill-env.sh
+
+# 2. Deploy application
 ./deploy.sh
 ```
 
-This script handles:
-- Namespace creation with kagenti labels
+`fill-env.sh` reads model SA tokens from the cluster and fills `<TODO>` placeholders in each service's `k8s.yaml` → `.k8s.yaml`.
+
+`deploy.sh` handles:
+- Namespace creation (`marketing`, `marketing-dev`, `marketing-prod`) with kagenti labels
 - `vertical-config` ConfigMap (config-service verticals)
 - AuthBridge config sync + SCC grants (kagenti sidecar injection)
 - All service manifests (`.k8s.yaml` priority, fallback to `k8s.yaml`)
@@ -260,29 +274,14 @@ This script handles:
 ./undeploy.sh
 ```
 
-Removes all application resources, Keycloak client/users/roles, and the namespace.
+Removes all application resources, Keycloak client/users/roles, and namespaces (`marketing`, `marketing-dev`, `marketing-prod`).
 
-### TrustyAI Guardrails (Optional)
+### Operational Scripts
 
-TrustyAI Guardrails is optional because it requires **Red Hat OpenShift AI 3.3+** with the TrustyAI component enabled (`trustyai.managementState: Managed` in DataScienceCluster CR). Without RHOAI, the GuardrailsOrchestrator CRD is unavailable and the detector InferenceServices cannot be deployed. campaign-api is designed for graceful degradation — when detector URLs are empty, the corresponding guardrail layers are skipped and the system operates with regex + Policy Guardian only.
-
-```bash
-# Install (default namespace: models)
-infra/guardrails/install.sh
-
-# Uninstall
-infra/guardrails/uninstall.sh
-```
-
-campaign-api connects to the detectors via environment variables in `k8s.yaml`:
-
-| Env Var | Purpose | Default |
-|---|---|---|
-| `HAP_DETECTOR_URL` | Hate/abuse/profanity detection | `""` (skip) |
-| `PROMPT_INJECTION_URL` | Prompt injection detection | `""` (skip) |
-| `ORCHESTRATOR_URL` | Orchestrator regex (gRPC-only, currently unused) | `""` (skip) |
-
-When guardrails are deployed, set the URLs to point to the detector services (e.g. `http://guardrails-detector-ibm-hap-predictor.models.svc.cluster.local:8000`). See [`infra/guardrails/README.md`](infra/guardrails/README.md) for full architecture and testing details.
+| Script | Description |
+|---|---|
+| `clear-traces.sh` | Delete all tracing data from MLflow |
+| `post-reboot.sh` | Manually reconcile ambient mesh pods after cluster reboot |
 
 ### Manual image build
 

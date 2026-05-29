@@ -23,8 +23,8 @@ metadata:
     app: imagegen-mcp
 type: Opaque
 stringData:
-  MODEL_ENDPOINT: "<TODO>"
-  MODEL_NAME: "<TODO>"
+  MODEL_ENDPOINT: "https://flux2-klein-4b-predictor.models.svc.cluster.local:8443/v1"
+  MODEL_NAME: "flux2-klein-4b"
   MODEL_API_KEY: "<TODO>"
 ---
 apiVersion: apps/v1
@@ -70,26 +70,22 @@ spec:
           mountPath: /data/images
         resources:
           requests:
-            memory: "384Mi"
+            memory: "256Mi"
             cpu: "100m"
           limits:
-            memory: "768Mi"
+            memory: "512Mi"
             cpu: "500m"
-        startupProbe:
-          httpGet:
-            path: /healthz
-            port: 8083
-          failureThreshold: 60
-          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8083
+          initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8083
+          initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
       - name: image-storage

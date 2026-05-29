@@ -46,6 +46,13 @@ oc get namespace "$NAMESPACE" &>/dev/null || oc new-project "$NAMESPACE" --displ
 oc label namespace "$NAMESPACE" kagenti-enabled=true shared-gateway-access=true \
   istio.io/dataplane-mode=ambient istio-discovery=enabled --overwrite 2>/dev/null || true
 
+# Create dev/prod namespaces
+for ENV_NS in "${NAMESPACE}-dev" "${NAMESPACE}-prod"; do
+  oc get namespace "$ENV_NS" &>/dev/null || oc new-project "$ENV_NS" --display-name="Marketing Assistant (${ENV_NS##*-})" 2>/dev/null || \
+    oc create namespace "$ENV_NS" 2>/dev/null
+  echo "  Namespace $ENV_NS: OK"
+done
+
 # Create vertical-config ConfigMap for config-service
 echo "  Creating vertical-config ConfigMap..."
 oc create configmap vertical-config \

@@ -1,3 +1,17 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flux2-klein-4b
+  labels:
+    app.kubernetes.io/component: models
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 40Gi
+---
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
@@ -13,10 +27,12 @@ spec:
   annotations:
     prometheus.io/path: /metrics
     prometheus.io/port: '8080'
+  storageHelper:
+    disabled: true
   containers:
     - args:
         - serve
-        - /mnt/models
+        - 'black-forest-labs/FLUX.2-klein-4B'
         - '--omni'
         - '--port=8080'
         - '--served-model-name={{.Name}}'
@@ -29,7 +45,9 @@ spec:
         - name: HOME
           value: /tmp
         - name: HF_HOME
-          value: /tmp/hf_home
+          value: /mnt/models
+        - name: HF_HUB_OFFLINE
+          value: '0'
         - name: VLLM_ATTENTION_BACKEND
           value: FLASH_ATTN
         - name: PYTORCH_CUDA_ALLOC_CONF
@@ -57,3 +75,46 @@ spec:
         medium: Memory
         sizeLimit: 12Gi
       name: shm
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  annotations:
+    modelFormat: vLLM
+    openshift.io/display-name: flux2-klein-4b
+    serving.kserve.io/deploymentMode: RawDeployment
+    security.opendatahub.io/enable-auth: 'true'
+    security.opendatahub.io/auth-proxy-type: kube-rbac-proxy
+  name: flux2-klein-4b
+  labels:
+    opendatahub.io/dashboard: 'true'
+spec:
+  predictor:
+    automountServiceAccountToken: false
+    deploymentStrategy:
+      type: Recreate
+    maxReplicas: 1
+    minReplicas: 1
+    model:
+      modelFormat:
+        name: vLLM
+      name: ''
+      resources:
+        limits:
+          cpu: '2'
+          memory: 24Gi
+          nvidia.com/gpu: '1'
+        requests:
+          cpu: '1'
+          memory: 12Gi
+          nvidia.com/gpu: '1'
+      runtime: flux2-klein-4b
+    timeout: 30
+    tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Exists
+    volumes:
+      - name: model-dir
+        persistentVolumeClaim:
+          claimName: flux2-klein-4b

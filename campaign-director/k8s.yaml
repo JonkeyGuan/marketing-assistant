@@ -12,7 +12,7 @@ data:
   DELIVERY_MANAGER_URL: "http://delivery-manager:8087"
   POLICY_GUARDIAN_URL: "http://policy-guardian:8085"
   EVENT_HUB_URL: "http://event-hub:8080"
-  CLUSTER_DOMAIN: ""
+  CLUSTER_DOMAIN: "<TODO>"
   DEV_NAMESPACE: "marketing-dev"
   PROD_NAMESPACE: "marketing-prod"
   CAMPAIGN_STORAGE_PATH: "/data/campaigns"
@@ -66,26 +66,22 @@ spec:
           mountPath: /data/campaigns
         resources:
           requests:
-            memory: "384Mi"
+            memory: "256Mi"
             cpu: "100m"
           limits:
-            memory: "768Mi"
+            memory: "512Mi"
             cpu: "500m"
-        startupProbe:
-          httpGet:
-            path: /healthz
-            port: 8088
-          failureThreshold: 60
-          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8088
+          initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8088
+          initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
       - name: campaign-storage

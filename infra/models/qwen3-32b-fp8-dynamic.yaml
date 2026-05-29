@@ -1,0 +1,108 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qwen3-32b-fp8-dynamic
+  labels:
+    app.kubernetes.io/component: models
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  annotations:
+    opendatahub.io/apiProtocol: REST
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+    opendatahub.io/runtime-version: v0.18.0
+    opendatahub.io/serving-runtime-scope: global
+    opendatahub.io/template-display-name: vLLM NVIDIA GPU ServingRuntime for KServe
+    opendatahub.io/template-name: vllm-cuda-runtime-template
+    openshift.io/display-name: vLLM NVIDIA GPU ServingRuntime for KServe
+  name: qwen3-32b-fp8-dynamic
+  labels:
+    opendatahub.io/dashboard: 'true'
+spec:
+  annotations:
+    opendatahub.io/kserve-runtime: vllm
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8080'
+  storageHelper:
+    disabled: true
+  containers:
+    - args:
+        - '--port=8080'
+        - '--model=RedHatAI/Qwen3-32B-FP8-dynamic'
+        - '--served-model-name={{.Name}}'
+      command:
+        - python
+        - '-m'
+        - vllm.entrypoints.openai.api_server
+      env:
+        - name: HF_HOME
+          value: /mnt/models
+        - name: HF_HUB_OFFLINE
+          value: '0'
+      image: 'registry.redhat.io/rhaii/vllm-cuda-rhel9@sha256:ad06abf3bb5235ebb5b2df84cd1b9fd09e823f0ff2eebfc82bb4590275ccfe0b'
+      name: kserve-container
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+  multiModel: false
+  supportedModelFormats:
+    - autoSelect: true
+      name: vLLM
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  annotations:
+    modelFormat: vLLM
+    openshift.io/display-name: qwen3-32b-fp8-dynamic
+    serving.kserve.io/deploymentMode: RawDeployment
+    security.opendatahub.io/enable-auth: 'true'
+    security.opendatahub.io/auth-proxy-type: kube-rbac-proxy
+  name: qwen3-32b-fp8-dynamic
+  labels:
+    opendatahub.io/dashboard: 'true'
+spec:
+  predictor:
+    automountServiceAccountToken: false
+    deploymentStrategy:
+      type: Recreate
+    maxReplicas: 1
+    minReplicas: 1
+    model:
+      args:
+        - '--dtype=auto'
+        - '--max-model-len=16000'
+        - '--gpu-memory-utilization=0.90'
+        - '--enable-auto-tool-choice'
+        - '--tool-call-parser=hermes'
+        - '--tensor-parallel-size=1'
+      modelFormat:
+        name: vLLM
+      name: ''
+      resources:
+        limits:
+          cpu: '1'
+          memory: 24Gi
+          nvidia.com/gpu: '1'
+        requests:
+          cpu: '1'
+          memory: 12Gi
+          nvidia.com/gpu: '1'
+      runtime: qwen3-32b-fp8-dynamic
+    timeout: 30
+    tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Exists
+    volumes:
+      - name: model-dir
+        persistentVolumeClaim:
+          claimName: qwen3-32b-fp8-dynamic

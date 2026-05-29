@@ -15,6 +15,9 @@ spec:
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
+  annotations:
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+    openshift.io/display-name: Guardrails Detector ServingRuntime for KServe
   name: guardrails-detector-runtime-hap
   labels:
     opendatahub.io/dashboard: 'true'
@@ -22,26 +25,25 @@ spec:
   annotations:
     prometheus.io/path: /metrics
     prometheus.io/port: '8080'
+  storageHelper:
+    disabled: true
   containers:
     - command: ["sh", "-c"]
       args:
         - |
-          if [ ! -f "$MODEL_DIR/config.json" ]; then
-            echo "[init] Model not found at $MODEL_DIR, downloading $HF_MODEL_ID ..."
+          if [ ! -f "$MODEL_DIR/.download_complete" ]; then
+            echo "[init] Downloading $HF_MODEL_ID to $MODEL_DIR ..."
+            rm -rf "$MODEL_DIR"/* "$MODEL_DIR"/.* 2>/dev/null || true
             pip install --no-cache-dir --target /tmp/hf_lib -q 'huggingface_hub>=0.34,<1.0'
             PYTHONPATH=/tmp/hf_lib python3 -c "
-          import os, shutil
+          import os
           from huggingface_hub import snapshot_download
-          path = snapshot_download(os.environ['HF_MODEL_ID'], cache_dir='/tmp/hf_cache')
-          dst = os.environ['MODEL_DIR']
-          for item in os.listdir(path):
-              s, d = os.path.join(path, item), os.path.join(dst, item)
-              if os.path.isdir(s):
-                  shutil.copytree(s, d, dirs_exist_ok=True)
-              else:
-                  shutil.copy(s, d)
+          snapshot_download(os.environ['HF_MODEL_ID'], local_dir=os.environ['MODEL_DIR'])
           "
+            touch "$MODEL_DIR/.download_complete"
             echo "[init] Download complete."
+          else
+            echo "[init] Model already exists at $MODEL_DIR, skipping download."
           fi
           exec uvicorn app:app --workers 4 --host 0.0.0.0 --port 8000 --log-config /common/log_conf.yaml
       env:
@@ -49,6 +51,8 @@ spec:
           value: /mnt/models
         - name: HF_HOME
           value: /tmp/hf_home
+        - name: HF_HUB_OFFLINE
+          value: '0'
         - name: HF_MODEL_ID
           value: ibm-granite/granite-guardian-hap-125m
       image: quay.io/trustyai/guardrails-detector-huggingface-runtime:latest
@@ -90,6 +94,6 @@ spec:
           memory: 4Gi
       runtime: guardrails-detector-runtime-hap
     volumes:
-      - name: model-storage
+      - name: model-dir
         persistentVolumeClaim:
           claimName: guardrails-detector-ibm-hap

@@ -109,8 +109,11 @@ fi
 # ---------------------------------------------------------------------------
 # Phase 3: Delete namespace
 # ---------------------------------------------------------------------------
-echo "[3/3] Deleting namespace..."
-oc delete namespace "$NAMESPACE" --ignore-not-found --timeout=120s 2>/dev/null || true
+echo "[3/3] Deleting namespaces..."
+for DEL_NS in "$NAMESPACE" "${NAMESPACE}-dev" "${NAMESPACE}-prod"; do
+  oc delete namespace "$DEL_NS" --ignore-not-found --timeout=120s 2>/dev/null || true
+  echo "  Deleted namespace: $DEL_NS"
+done
 
 echo ""
 echo "=== Uninstall complete ==="
