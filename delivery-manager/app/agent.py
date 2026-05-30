@@ -174,15 +174,27 @@ def deploy_campaign_local(campaign_id: str, namespace: str) -> str:
     return f"local://{namespace}/campaign-{campaign_id[:8]}"
 
 
-def _extract_hero_image_url(html: str, imagegen_base: str) -> tuple[str, str]:
+def _extract_hero_image_url(html: str, campaign_api_base: str, campaign_id: str) -> tuple[str, str]:
     """Extract the hero image path from HTML and replace with /hero-image.png.
-    Returns (modified_html, full_image_url). If no match, returns (html, "")."""
+    Returns (modified_html, full_image_url_for_campaign_landing)."""
     import re
+    asset_pattern = rf"/api/campaigns/{re.escape(campaign_id)}/assets/hero\.png"
+    if re.search(asset_pattern, html):
+        html = re.sub(asset_pattern, "/hero-image.png", html)
+        return html, f"{campaign_api_base}/api/campaigns/{campaign_id}/assets/hero.png"
     match = re.search(r"url\(['\"]?(/images/[^'\")\s]+)['\"]?\)", html)
     if match:
         image_path = match.group(1)
-        return html.replace(image_path, "/hero-image.png"), f"{imagegen_base}{image_path}"
+        return html.replace(image_path, "/hero-image.png"), f"http://imagegen-mcp.{settings.APP_NAMESPACE}.svc:8083{image_path}"
     return html, ""
+
+
+def _upload_asset(campaign_id: str, filename: str, data: bytes | str, content_type: str):
+    url = f"{settings.CAMPAIGN_API_URL}/api/campaigns/{campaign_id}/assets/{filename}"
+    body = data if isinstance(data, bytes) else data.encode("utf-8")
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.put(url, content=body, headers={"Content-Type": content_type})
+        resp.raise_for_status()
 
 
 _k8s_configured = False
@@ -252,8 +264,8 @@ def _do_k8s_deploy(campaign_id: str, html_content: str, namespace: str,
     from kubernetes import client
     from kubernetes.client.rest import ApiException
 
-    imagegen_base = f"http://imagegen-mcp.{settings.APP_NAMESPACE}.svc:8083"
-    html_content, hero_image_url = _extract_hero_image_url(html_content, imagegen_base)
+    campaign_api_base = f"http://campaign-api.{settings.APP_NAMESPACE}.svc:8089"
+    html_content, hero_image_url = _extract_hero_image_url(html_content, campaign_api_base, campaign_id)
 
     core_v1 = client.CoreV1Api()
     apps_v1 = client.AppsV1Api()
@@ -261,26 +273,13 @@ def _do_k8s_deploy(campaign_id: str, html_content: str, namespace: str,
     deployment_name = f"campaign-{campaign_id[:8]}-{suffix}"
     print(f"[Delivery Manager] Deploying {deployment_name} to {namespace}")
 
-    data_configmap = client.V1ConfigMap(
-        metadata=client.V1ObjectMeta(name=f"{deployment_name}-data"),
-        data={
-            "template.html": html_content,
-            "customers.json": customers_json,
-            "campaign.json": campaign_json,
-        },
-    )
-
     try:
-        core_v1.create_namespaced_config_map(namespace=namespace, body=data_configmap)
-        print(f"[Delivery Manager] ConfigMap created")
-    except ApiException as e:
-        if e.status == 409:
-            core_v1.replace_namespaced_config_map(
-                name=f"{deployment_name}-data", namespace=namespace, body=data_configmap)
-            print(f"[Delivery Manager] ConfigMap replaced")
-        else:
-            print(f"[Delivery Manager] ConfigMap failed: {e.status} {e.reason}")
-            raise
+        _upload_asset(campaign_id, "template.html", html_content, "text/html")
+        _upload_asset(campaign_id, "customers.json", customers_json, "application/json")
+        _upload_asset(campaign_id, "campaign.json", campaign_json, "application/json")
+        print(f"[Delivery Manager] Assets uploaded to campaign-api")
+    except Exception as e:
+        print(f"[Delivery Manager] Asset upload failed: {e}")
 
     deployment = client.V1Deployment(
         metadata=client.V1ObjectMeta(name=deployment_name),
@@ -297,17 +296,11 @@ def _do_k8s_deploy(campaign_id: str, html_content: str, namespace: str,
                             image_pull_policy="Always",
                             ports=[client.V1ContainerPort(container_port=3001)],
                             env=[
-                                client.V1EnvVar(name="MONGODB_MCP_URL",
-                                                value=f"http://mongodb-mcp.{settings.APP_NAMESPACE}.svc:8082"),
-                                client.V1EnvVar(name="HERO_IMAGE_URL", value=hero_image_url),
+                                client.V1EnvVar(name="CAMPAIGN_API_URL", value=campaign_api_base),
+                                client.V1EnvVar(name="CAMPAIGN_ID", value=campaign_id),
                             ],
-                            volume_mounts=[client.V1VolumeMount(name="data", mount_path="/data")],
                         )
                     ],
-                    volumes=[client.V1Volume(
-                        name="data",
-                        config_map=client.V1ConfigMapVolumeSource(name=f"{deployment_name}-data"),
-                    )],
                 ),
             ),
         ),
@@ -402,6 +395,13 @@ def cleanup_campaign_k8s(campaign_id: str):
                 deleted.append(f"Route/{name} in {namespace}")
             except Exception:
                 pass
+
+    try:
+        with httpx.Client(timeout=10.0) as hc:
+            hc.delete(f"{settings.CAMPAIGN_API_URL}/api/campaigns/{campaign_id}/assets")
+        deleted.append("campaign-api assets")
+    except Exception as e:
+        print(f"[Delivery Manager] Asset cleanup failed: {e}")
 
     print(f"[Delivery Manager] Cleaned up: {deleted}")
     return {"status": "success", "deleted": deleted}

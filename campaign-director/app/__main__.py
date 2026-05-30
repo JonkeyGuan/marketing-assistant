@@ -73,17 +73,6 @@ async def health_check(request: Request):
     return JSONResponse({"status": "healthy", "agent": "Campaign Director"})
 
 
-async def list_campaigns(request: Request):
-    return JSONResponse([c.model_dump(mode="json") for c in campaigns_store.values()])
-
-
-async def get_campaign(request: Request):
-    campaign_id = request.path_params["campaign_id"]
-    if campaign_id not in campaigns_store:
-        return JSONResponse({"error": "Campaign not found"}, status_code=404)
-    return JSONResponse(campaigns_store[campaign_id].model_dump(mode="json"))
-
-
 class AuthCapture(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         token = _auth_header.set(request.headers.get("Authorization", ""))
@@ -96,8 +85,6 @@ app = Starlette(
     routes=[
         Route("/healthz", health_check, methods=["GET"]),
         Route("/readyz", health_check, methods=["GET"]),
-        Route("/campaigns", list_campaigns, methods=["GET"]),
-        Route("/campaigns/{campaign_id}", get_campaign, methods=["GET"]),
         *create_agent_card_routes(agent_card),
         *create_jsonrpc_routes(handler, rpc_url="/", enable_v0_3_compat=True),
     ],

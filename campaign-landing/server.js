@@ -1,148 +1,71 @@
 const express = require("express");
-const fs = require("fs");
 const http = require("http");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const DATA_DIR = process.env.DATA_DIR || "/data";
-const TEMPLATE_PATH = `${DATA_DIR}/template.html`;
-const CAMPAIGN_PATH = `${DATA_DIR}/campaign.json`;
-const MONGODB_MCP_URL = process.env.MONGODB_MCP_URL || "http://mongodb-mcp:8082";
-const HERO_IMAGE_URL = process.env.HERO_IMAGE_URL || "";
+const CAMPAIGN_API_URL = process.env.CAMPAIGN_API_URL || "http://campaign-api:8089";
+const CAMPAIGN_ID = process.env.CAMPAIGN_ID || "";
 
+let cachedTemplate = null;
+let cachedCampaign = {};
+let cachedCustomers = {};
 let heroImageBuffer = null;
-let heroImageFetched = false;
+let dataLoaded = false;
 
-let customerCache = {};
-let cacheTime = 0;
-const CACHE_TTL = 60000;
-
-function loadFile(filePath) {
-  try { return fs.readFileSync(filePath, "utf-8"); } catch { return null; }
-}
-
-function getCampaign() {
-  const raw = loadFile(CAMPAIGN_PATH);
-  try { return raw ? JSON.parse(raw) : {}; } catch { return {}; }
-}
-
-function parseSseJson(text) {
-  for (const line of text.split("\n")) {
-    if (line.startsWith("data: ")) {
-      try { return JSON.parse(line.slice(6)); } catch {}
-    }
+async function loadDataFromApi() {
+  if (!CAMPAIGN_ID) {
+    console.log("[Campaign Landing] No CAMPAIGN_ID set, skipping data load");
+    return;
   }
-  return JSON.parse(text);
-}
-
-async function fetchCustomerFromMCP(customerId) {
-  if (customerCache[customerId] && Date.now() - cacheTime < CACHE_TTL) {
-    return customerCache[customerId];
-  }
-
-  const mcpHeaders = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/event-stream",
-  };
+  const base = `${CAMPAIGN_API_URL}/api/campaigns/${CAMPAIGN_ID}/assets`;
 
   try {
-    const resp = await fetch(`${MONGODB_MCP_URL}/mcp`, {
-      method: "POST",
-      headers: mcpHeaders,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "campaign-landing", version: "1.0.0" },
-        },
-        id: 1,
-      }),
-    });
-
-    if (!resp.ok) throw new Error(`MCP init failed: ${resp.status}`);
-    const sessionId = resp.headers.get("mcp-session-id") || "";
-
-    const searchResp = await fetch(`${MONGODB_MCP_URL}/mcp`, {
-      method: "POST",
-      headers: { ...mcpHeaders, "mcp-session-id": sessionId },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: {
-          name: "get_all_vip_customers",
-          arguments: { limit: 100 },
-        },
-        id: 2,
-      }),
-    });
-
-    if (searchResp.ok) {
-      const raw = await searchResp.text();
-      const data = parseSseJson(raw);
-      if (data.result && data.result.content) {
-        const customers = JSON.parse(data.result.content[0].text);
-        customerCache = {};
-        for (const c of customers) {
-          customerCache[c.customer_id] = c;
-        }
-      }
+    const templateResp = await fetch(`${base}/template.html`);
+    if (templateResp.ok) {
+      cachedTemplate = await templateResp.text();
+      console.log(`[Campaign Landing] Template loaded (${cachedTemplate.length} chars)`);
     }
-
-    // Also fetch prospects so PROSPECT-* IDs resolve
-    const prospectResp = await fetch(`${MONGODB_MCP_URL}/mcp`, {
-      method: "POST",
-      headers: { ...mcpHeaders, "mcp-session-id": sessionId },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: {
-          name: "get_prospects",
-          arguments: { limit: 100 },
-        },
-        id: 3,
-      }),
-    });
-
-    if (prospectResp.ok) {
-      const raw = await prospectResp.text();
-      const data = parseSseJson(raw);
-      if (data.result && data.result.content) {
-        const prospects = JSON.parse(data.result.content[0].text);
-        for (const p of prospects) {
-          customerCache[p.customer_id] = p;
-        }
-      }
-    }
-
-    cacheTime = Date.now();
-    return customerCache[customerId] || null;
   } catch (e) {
-    console.log(`[Campaign Landing] MCP fetch failed, trying ConfigMap fallback: ${e.message}`);
+    console.log(`[Campaign Landing] Template fetch failed: ${e.message}`);
   }
 
-  // Fallback to ConfigMap file if MCP fails
   try {
-    const raw = loadFile(`${DATA_DIR}/customers.json`);
-    if (raw) {
-      const list = JSON.parse(raw);
-      for (const c of list) {
-        customerCache[c.customer_id] = c;
-      }
-      cacheTime = Date.now();
-      return customerCache[customerId] || null;
-    }
-  } catch {}
+    const campaignResp = await fetch(`${base}/campaign.json`);
+    if (campaignResp.ok) cachedCampaign = await campaignResp.json();
+  } catch (e) {
+    console.log(`[Campaign Landing] Campaign fetch failed: ${e.message}`);
+  }
 
-  return null;
+  try {
+    const customersResp = await fetch(`${base}/customers.json`);
+    if (customersResp.ok) {
+      const list = await customersResp.json();
+      for (const c of list) {
+        cachedCustomers[c.customer_id] = c;
+      }
+      console.log(`[Campaign Landing] Loaded ${list.length} customers`);
+    }
+  } catch (e) {
+    console.log(`[Campaign Landing] Customers fetch failed: ${e.message}`);
+  }
+
+  try {
+    const heroResp = await fetch(`${base}/hero.png`);
+    if (heroResp.ok) {
+      heroImageBuffer = Buffer.from(await heroResp.arrayBuffer());
+      console.log(`[Campaign Landing] Hero image downloaded (${heroImageBuffer.length} bytes)`);
+    }
+  } catch (e) {
+    console.log(`[Campaign Landing] Hero image fetch failed: ${e.message}`);
+  }
+
+  dataLoaded = true;
 }
 
 function personalize(html, customer, campaign) {
   const isProspect = customer.tier === "prospect";
 
-  // Prospects get anonymous treatment — no names, just inviting language
   const name = isProspect ? "Distinguished Guest" : (customer.name_en || customer.name || "Valued Guest");
   const firstName = isProspect ? "Distinguished Guest" : (customer.name_en || customer.name || "Guest").split(" ")[0];
   const tier = (customer.tier || "VIP").charAt(0).toUpperCase() + (customer.tier || "vip").slice(1);
@@ -172,7 +95,6 @@ function personalize(html, customer, campaign) {
     result = result.split(key).join(value);
   }
 
-  // Catch LLM-hardcoded generic text that should have been placeholders
   result = result
     .replace(/Honored Guest/g, tierEn)
     .replace(/Valued Guest/g, name)
@@ -197,29 +119,7 @@ function applyGenericDefaults(html, campaign) {
     .split("{{HOTEL_NAME}}").join(campaign.hotel_name || "Simon Casino Resort");
 }
 
-function fetchHeroImage() {
-  if (!HERO_IMAGE_URL || heroImageFetched) return;
-  heroImageFetched = true;
-  http.get(HERO_IMAGE_URL, (res) => {
-    if (res.statusCode !== 200) {
-      console.log(`[Campaign Landing] Hero image fetch failed: ${res.statusCode}`);
-      return;
-    }
-    const chunks = [];
-    res.on("data", (chunk) => chunks.push(chunk));
-    res.on("end", () => {
-      heroImageBuffer = Buffer.concat(chunks);
-      console.log(`[Campaign Landing] Hero image downloaded (${heroImageBuffer.length} bytes)`);
-    });
-  }).on("error", (e) => {
-    console.log(`[Campaign Landing] Hero image fetch error: ${e.message}`);
-  });
-}
-
 app.get("/hero-image.png", (req, res) => {
-  if (!heroImageFetched) {
-    fetchHeroImage();
-  }
   if (heroImageBuffer) {
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "public, max-age=3600");
@@ -233,17 +133,14 @@ app.get("/healthz", (req, res) => {
 });
 
 app.get("/readyz", (req, res) => {
-  const template = loadFile(TEMPLATE_PATH);
-  res.json({ status: template ? "ready" : "not ready" });
+  res.json({ status: dataLoaded && cachedTemplate ? "ready" : "not ready" });
 });
 
 app.get("/", async (req, res) => {
-  const template = loadFile(TEMPLATE_PATH);
-  if (!template) {
+  if (!cachedTemplate) {
     return res.status(503).send("Landing page not yet configured");
   }
 
-  const campaign = getCampaign();
   const customerId = req.query.c;
 
   res.setHeader("Content-Type", "text/html");
@@ -251,24 +148,21 @@ app.get("/", async (req, res) => {
   res.setHeader("Content-Security-Policy", "");
 
   if (!customerId) {
-    return res.send(applyGenericDefaults(template, campaign));
+    return res.send(applyGenericDefaults(cachedTemplate, cachedCampaign));
   }
 
-  const customer = await fetchCustomerFromMCP(customerId);
+  const customer = cachedCustomers[customerId] || null;
 
   if (!customer) {
-    return res.send(applyGenericDefaults(template, campaign));
+    return res.send(applyGenericDefaults(cachedTemplate, cachedCampaign));
   }
 
-  res.send(personalize(template, customer, campaign));
+  res.send(personalize(cachedTemplate, customer, cachedCampaign));
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[Campaign Landing] Serving on 0.0.0.0:${PORT}`);
-  console.log(`[Campaign Landing] Template: ${TEMPLATE_PATH}`);
-  console.log(`[Campaign Landing] MongoDB MCP: ${MONGODB_MCP_URL}`);
-  if (HERO_IMAGE_URL) {
-    console.log(`[Campaign Landing] Hero image: ${HERO_IMAGE_URL}`);
-    fetchHeroImage();
-  }
+  console.log(`[Campaign Landing] Campaign API: ${CAMPAIGN_API_URL}`);
+  console.log(`[Campaign Landing] Campaign ID: ${CAMPAIGN_ID}`);
+  await loadDataFromApi();
 });

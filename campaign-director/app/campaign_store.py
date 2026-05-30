@@ -1,7 +1,8 @@
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -21,29 +22,28 @@ class CampaignStore:
 
     def __init__(self):
         self._store: dict = {}
-        self._disk_enabled = False
-        self._storage_path: Path | None = None
+        self._api_url: str = ""
 
-    def init(self, storage_path: str):
-        self._storage_path = Path(storage_path)
-        try:
-            self._storage_path.mkdir(parents=True, exist_ok=True)
-            self._disk_enabled = True
-            self._load_from_disk()
-            logger.info("Campaign store: disk persistence enabled at %s, loaded %d campaigns",
-                        self._storage_path, len(self._store))
-        except OSError as e:
-            logger.info("Campaign store: disk persistence disabled (%s), using memory-only", e)
+    def init(self, api_url: str):
+        self._api_url = api_url.rstrip("/")
+        self._load_from_api()
+        logger.info("Campaign store: using campaign-api at %s, loaded %d campaigns",
+                     self._api_url, len(self._store))
 
-    def _load_from_disk(self):
+    def _load_from_api(self):
         from app.schemas import CampaignData
-        for f in self._storage_path.glob("*.json"):
-            try:
-                obj = json.loads(f.read_text(encoding="utf-8"))
-                campaign = CampaignData(**obj)
-                self._store[campaign.id] = campaign
-            except Exception as e:
-                logger.warning("Failed to load campaign from %s: %s", f.name, e)
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(f"{self._api_url}/api/campaigns")
+                if resp.status_code == 200:
+                    for obj in resp.json():
+                        try:
+                            campaign = CampaignData(**obj)
+                            self._store[campaign.id] = campaign
+                        except Exception as e:
+                            logger.warning("Failed to load campaign: %s", e)
+        except Exception as e:
+            logger.info("Campaign store: could not load from API (%s), starting empty", e)
 
     def _serialize(self, campaign) -> str:
         data = {}
@@ -62,22 +62,17 @@ class CampaignStore:
         return json.dumps(data, ensure_ascii=False)
 
     def sync(self, campaign_id: str):
-        if not self._disk_enabled or campaign_id not in self._store:
+        if not self._api_url or campaign_id not in self._store:
             return
         try:
-            path = self._storage_path / f"{campaign_id}.json"
-            path.write_text(self._serialize(self._store[campaign_id]), encoding="utf-8")
-        except OSError as e:
-            logger.warning("Failed to persist campaign %s: %s", campaign_id, e)
-
-    def _remove_from_disk(self, campaign_id: str):
-        if not self._disk_enabled:
-            return
-        try:
-            path = self._storage_path / f"{campaign_id}.json"
-            path.unlink(missing_ok=True)
-        except OSError as e:
-            logger.warning("Failed to remove campaign %s from disk: %s", campaign_id, e)
+            with httpx.Client(timeout=10.0) as client:
+                client.put(
+                    f"{self._api_url}/api/campaigns/{campaign_id}",
+                    content=self._serialize(self._store[campaign_id]).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+        except Exception as e:
+            logger.warning("Failed to sync campaign %s to API: %s", campaign_id, e)
 
     def __setitem__(self, key, value):
         self._store[key] = value
@@ -91,15 +86,12 @@ class CampaignStore:
 
     def __delitem__(self, key):
         del self._store[key]
-        self._remove_from_disk(key)
 
     def __len__(self):
         return len(self._store)
 
     def pop(self, key, *args):
-        result = self._store.pop(key, *args)
-        self._remove_from_disk(key)
-        return result
+        return self._store.pop(key, *args)
 
     def get(self, key, default=None):
         return self._store.get(key, default)

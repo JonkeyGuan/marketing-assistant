@@ -1,15 +1,13 @@
 import base64
 import logging
 import uuid
-from collections import OrderedDict
-from pathlib import Path
 
 import httpx
 from fastmcp import FastMCP
 from openai import AsyncOpenAI
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from app.settings import settings
@@ -18,46 +16,6 @@ from app.vertical_config import prompt as vcfg_prompt
 logger = logging.getLogger("imagegen_mcp")
 
 mcp = FastMCP("Image Generation MCP")
-
-MAX_IMAGES = 50
-image_store: OrderedDict[str, bytes] = OrderedDict()
-_storage_path = Path(settings.IMAGE_STORAGE_PATH)
-_disk_enabled = False
-
-
-def _init_storage():
-    global _disk_enabled
-    try:
-        _storage_path.mkdir(parents=True, exist_ok=True)
-        _disk_enabled = True
-        logger.info("Image disk persistence enabled: %s", _storage_path)
-    except OSError as e:
-        logger.info("Image disk persistence disabled (local mode): %s", e)
-
-
-_init_storage()
-
-
-def _store_image(image_id: str, image_bytes: bytes):
-    while len(image_store) >= MAX_IMAGES:
-        image_store.popitem(last=False)
-    image_store[image_id] = image_bytes
-    if _disk_enabled:
-        try:
-            (_storage_path / f"{image_id}.png").write_bytes(image_bytes)
-        except OSError as e:
-            logger.warning("Failed to persist image %s to disk: %s", image_id, e)
-
-
-def _load_image_from_disk(image_id: str) -> bytes | None:
-    if not _disk_enabled:
-        return None
-    path = _storage_path / f"{image_id}.png"
-    if path.is_file():
-        data = path.read_bytes()
-        image_store[image_id] = data
-        return data
-    return None
 
 
 def _get_llm_client():
@@ -78,8 +36,6 @@ THEME_PROMPTS = {
     "modern_black": "sleek monochrome, silver accents, futuristic minimalism, dramatic shadows, architectural lines",
     "classic_emerald": "deep emerald green felt, gold and brass accents, classic elegance, vintage glamour",
 }
-
-PLACEHOLDER_B64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
 
 PLACEHOLDER_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
@@ -171,78 +127,21 @@ async def generate_campaign_image(
     prompt = _build_prompt(campaign_name, hotel_name, theme, description)
 
     if is_mock_mode():
-        _store_image(image_id, PLACEHOLDER_PNG)
         return {
-            "image_url": f"/images/{image_id}.png",
             "image_id": image_id,
+            "image_data_b64": base64.b64encode(PLACEHOLDER_PNG).decode("utf-8"),
             "prompt": prompt,
             "status": "success",
             "mock": True,
         }
 
     image_bytes = await _call_imagegen_api(prompt, width, height)
-    _store_image(image_id, image_bytes)
     return {
-        "image_url": f"/images/{image_id}.png",
         "image_id": image_id,
+        "image_data_b64": base64.b64encode(image_bytes).decode("utf-8"),
         "prompt": prompt,
         "status": "success",
     }
-
-
-@mcp.tool
-async def generate_campaign_image_b64(
-    campaign_name: str,
-    hotel_name: str = "Simon Casino Resort",
-    theme: str = "luxury_gold",
-    description: str = "",
-    width: int = 1024,
-    height: int = 576,
-) -> dict:
-    """Generate a marketing hero banner and return as base64 data URI.
-
-    Args:
-        campaign_name: Name of the marketing campaign
-        hotel_name: Hotel/casino name for branding
-        theme: Visual theme (luxury_gold, festive_red, modern_black, classic_emerald)
-        description: Optional campaign description for prompt context
-        width: Image width in pixels
-        height: Image height in pixels
-    """
-    if is_mock_mode():
-        image_id = f"img-{uuid.uuid4().hex[:12]}"
-        return {
-            "data_uri": PLACEHOLDER_B64,
-            "image_id": image_id,
-            "prompt": _build_prompt(campaign_name, hotel_name, theme, description),
-            "status": "success",
-            "mock": True,
-        }
-
-    prompt = _build_prompt(campaign_name, hotel_name, theme, description)
-    image_bytes = await _call_imagegen_api(prompt, width, height)
-
-    image_id = f"img-{uuid.uuid4().hex[:12]}"
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
-    return {
-        "data_uri": f"data:image/png;base64,{b64}",
-        "image_id": image_id,
-        "prompt": prompt,
-        "status": "success",
-    }
-
-
-async def serve_image(request: Request):
-    filename = request.path_params["filename"]
-    image_id = filename.replace(".png", "")
-    data = image_store.get(image_id) or _load_image_from_disk(image_id)
-    if data is None:
-        return JSONResponse({"error": "Image not found"}, status_code=404)
-    return Response(
-        content=data,
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
 
 
 async def health(request: Request):
@@ -259,7 +158,6 @@ app = Starlette(
     routes=[
         Route("/healthz", health, methods=["GET"]),
         Route("/readyz", health, methods=["GET"]),
-        Route("/images/{filename}", serve_image, methods=["GET"]),
         Mount("/", app=mcp_app),
     ],
     lifespan=mcp_app.lifespan,

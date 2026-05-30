@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     HAP_DETECTOR_URL: str = ""
     PROMPT_INJECTION_URL: str = ""
     ORCHESTRATOR_URL: str = ""
+    ASSET_STORAGE_PATH: str = "/tmp/campaign-assets"
     LOG_LEVEL: str = "INFO"
 
     class Config:

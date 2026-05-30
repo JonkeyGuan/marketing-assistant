@@ -22,7 +22,7 @@ from app.vertical_config import brand
 _auth_header: ContextVar[str] = ContextVar("_auth_header", default="")
 
 campaigns_store = CampaignStore()
-campaigns_store.init(settings.CAMPAIGN_STORAGE_PATH)
+campaigns_store.init(settings.CAMPAIGN_API_URL)
 
 
 class CampaignState(TypedDict):
@@ -321,9 +321,11 @@ def _check_failed(state: CampaignState) -> str:
 
 def build_landing_page_workflow():
     workflow = StateGraph(CampaignState)
+    workflow.add_node("retrieve_customers", retrieve_customers_node)
     workflow.add_node("generate_landing_page", generate_landing_page_node)
     workflow.add_node("deploy_preview", deploy_preview_node)
-    workflow.add_edge(START, "generate_landing_page")
+    workflow.add_edge(START, "retrieve_customers")
+    workflow.add_conditional_edges("retrieve_customers", _check_failed, {"continue": "generate_landing_page", "end": END})
     workflow.add_conditional_edges("generate_landing_page", _check_failed, {"continue": "deploy_preview", "end": END})
     workflow.add_edge("deploy_preview", END)
     return workflow.compile()

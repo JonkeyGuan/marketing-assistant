@@ -7,7 +7,6 @@ metadata:
 data:
   PORT: "8083"
   CONFIG_SERVICE_URL: "http://config-service:8081"
-  IMAGE_STORAGE_PATH: "/data/images"
   LOG_LEVEL: "INFO"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335"
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335/v1/traces"
@@ -66,9 +65,6 @@ spec:
             name: imagegen-mcp-config
         - secretRef:
             name: imagegen-mcp-secrets
-        volumeMounts:
-        - name: image-storage
-          mountPath: /data/images
         resources:
           requests:
             memory: "256Mi"
@@ -88,23 +84,6 @@ spec:
             port: 8083
           initialDelaySeconds: 5
           periodSeconds: 5
-      volumes:
-      - name: image-storage
-        persistentVolumeClaim:
-          claimName: imagegen-mcp-images
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: imagegen-mcp-images
-  labels:
-    app: imagegen-mcp
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

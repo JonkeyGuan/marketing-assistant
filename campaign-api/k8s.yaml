@@ -13,6 +13,7 @@ data:
   HAP_DETECTOR_URL: "http://guardrails-detector-ibm-hap-predictor.models.svc.cluster.local:8000"
   PROMPT_INJECTION_URL: "http://prompt-injection-detector-predictor.models.svc.cluster.local:8000"
   ORCHESTRATOR_URL: ""
+  ASSET_STORAGE_PATH: "/data/campaigns"
   LOG_LEVEL: "INFO"
 ---
 apiVersion: apps/v1
@@ -43,6 +44,9 @@ spec:
         envFrom:
         - configMapRef:
             name: campaign-api-config
+        volumeMounts:
+        - name: campaign-data
+          mountPath: /data/campaigns
         resources:
           requests:
             memory: "512Mi"
@@ -62,6 +66,23 @@ spec:
             port: 8089
           initialDelaySeconds: 5
           periodSeconds: 5
+      volumes:
+      - name: campaign-data
+        persistentVolumeClaim:
+          claimName: campaign-api-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: campaign-api-data
+  labels:
+    app: campaign-api
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

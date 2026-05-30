@@ -15,7 +15,7 @@ data:
   CLUSTER_DOMAIN: "<TODO>"
   DEV_NAMESPACE: "marketing-dev"
   PROD_NAMESPACE: "marketing-prod"
-  CAMPAIGN_STORAGE_PATH: "/data/campaigns"
+  CAMPAIGN_API_URL: "http://campaign-api:8089"
   CONFIG_SERVICE_URL: "http://config-service:8081"
   LOG_LEVEL: "INFO"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.kagenti-system.svc.cluster.local:8335"
@@ -39,7 +39,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
   selector:
     matchLabels:
       app: campaign-director
@@ -62,9 +62,6 @@ spec:
         envFrom:
         - configMapRef:
             name: campaign-director-config
-        volumeMounts:
-        - name: campaign-storage
-          mountPath: /data/campaigns
         resources:
           requests:
             memory: "256Mi"
@@ -84,23 +81,6 @@ spec:
             port: 8088
           initialDelaySeconds: 5
           periodSeconds: 5
-      volumes:
-      - name: campaign-storage
-        persistentVolumeClaim:
-          claimName: campaign-director-data
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: campaign-director-data
-  labels:
-    app: campaign-director
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Mi
 ---
 apiVersion: v1
 kind: Service

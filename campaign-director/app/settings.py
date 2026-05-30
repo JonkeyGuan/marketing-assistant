@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     DEV_NAMESPACE: str = "marketing-dev"
     PROD_NAMESPACE: str = "marketing-prod"
 
-    CAMPAIGN_STORAGE_PATH: str = "/tmp/campaigns"
+    CAMPAIGN_API_URL: str = "http://localhost:8089"
     CONFIG_SERVICE_URL: str = "http://localhost:8081"
     LOG_LEVEL: str = "INFO"
 

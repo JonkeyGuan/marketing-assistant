@@ -83,6 +83,11 @@ export default function Inbox() {
       <div className="min-h-screen bg-surface">
         <header className="bg-surface-container-lowest border-b border-outline-variant/30 px-6 py-3 flex items-center justify-between sticky top-0 z-50">
           <div className="flex items-center gap-3">
+            <a href="/" className="flex items-center gap-1 text-on-surface-variant hover:text-primary transition-colors">
+              <span className="material-symbols-outlined text-sm">arrow_back</span>
+              <span className="text-sm">Campaigns</span>
+            </a>
+            <span className="text-outline-variant">|</span>
             <span className="material-symbols-outlined text-2xl text-red-500">mail</span>
             <span className="text-lg font-bold text-on-surface font-headline">Mail</span>
           </div>
@@ -150,6 +155,11 @@ export default function Inbox() {
     <div className="min-h-screen bg-surface">
       <header className="bg-surface-container-lowest border-b border-outline-variant/30 px-6 py-3 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
+          <a href="/" className="flex items-center gap-1 text-on-surface-variant hover:text-primary transition-colors">
+            <span className="material-symbols-outlined text-sm">arrow_back</span>
+            <span className="text-sm">Campaigns</span>
+          </a>
+          <span className="text-outline-variant">|</span>
           <span className="material-symbols-outlined text-2xl text-red-500">mail</span>
           <span className="text-lg font-bold text-on-surface font-headline">Mail</span>
         </div>

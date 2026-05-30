@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     MODEL_API_KEY: str = ""
     EVENT_HUB_URL: str = "http://localhost:8080"
     IMAGEGEN_MCP_URL: str = "http://localhost:8083"
+    CAMPAIGN_API_URL: str = "http://localhost:8089"
 
     CONFIG_SERVICE_URL: str = "http://localhost:8081"
     LOG_LEVEL: str = "INFO"

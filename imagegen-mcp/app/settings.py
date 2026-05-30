@@ -7,7 +7,6 @@ class Settings(BaseSettings):
     MODEL_NAME: str = "flux2-klein-4b"
     MODEL_API_KEY: str = ""
     CONFIG_SERVICE_URL: str = "http://localhost:8081"
-    IMAGE_STORAGE_PATH: str = "/tmp/images"
     LOG_LEVEL: str = "INFO"
 
     class Config:

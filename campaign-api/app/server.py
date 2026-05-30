@@ -1,10 +1,12 @@
 import asyncio
 import json
 import re
+import shutil
 import uuid
+from pathlib import Path
 
 import httpx
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, send_file
 from flask_cors import CORS
 
 from app.schemas import CampaignRequest, CampaignTheme, CAMPAIGN_THEMES
@@ -305,30 +307,31 @@ def get_vertical_config():
 
 @app.route("/api/campaigns", methods=["GET"])
 def list_campaigns():
-    try:
-        auth_header = request.headers.get("Authorization", "")
-        headers = {"Authorization": auth_header} if auth_header else {}
-        with httpx.Client(timeout=30.0, headers=headers) as client:
-            response = client.get(f"{settings.CAMPAIGN_DIRECTOR_URL}/campaigns")
-            if response.status_code != 200:
-                return jsonify({"error": "Failed to fetch campaigns"}), 500
-            return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    campaigns = []
+    for state_file in _asset_root.glob("*/state.json"):
+        try:
+            campaigns.append(json.loads(state_file.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    campaigns.sort(key=lambda c: c.get("created_at", ""), reverse=True)
+    return jsonify(campaigns)
 
 
 @app.route("/api/campaigns/<campaign_id>", methods=["GET"])
 def get_campaign(campaign_id: str):
-    try:
-        auth_header = request.headers.get("Authorization", "")
-        headers = {"Authorization": auth_header} if auth_header else {}
-        with httpx.Client(timeout=30.0, headers=headers) as client:
-            response = client.get(f"{settings.CAMPAIGN_DIRECTOR_URL}/campaigns/{campaign_id}")
-            if response.status_code == 404:
-                return jsonify({"error": "Campaign not found"}), 404
-            return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    path = _asset_root / campaign_id / "state.json"
+    if not path.is_file():
+        return jsonify({"error": "Campaign not found"}), 404
+    return jsonify(json.loads(path.read_text(encoding="utf-8")))
+
+
+@app.route("/api/campaigns/<campaign_id>", methods=["PUT"])
+def put_campaign(campaign_id: str):
+    campaign_dir = _asset_root / campaign_id
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    path = campaign_dir / "state.json"
+    path.write_bytes(request.data)
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/api/campaigns/validate", methods=["POST"])
@@ -403,8 +406,9 @@ def delete_campaign(campaign_id: str):
     try:
         auth_header = request.headers.get("Authorization", "")
         result = call_director_a2a_sync("delete_campaign", {"campaign_id": campaign_id}, auth_header)
-        if "error" in result and result["error"]:
-            return jsonify(result), 404
+        campaign_dir = _asset_root / campaign_id
+        if campaign_dir.is_dir():
+            shutil.rmtree(campaign_dir)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -498,6 +502,48 @@ def mark_read(email_id):
             email["read"] = True
             return jsonify(email)
     return jsonify({"read": True}), 200
+
+
+_asset_root = Path(settings.ASSET_STORAGE_PATH)
+_asset_root.mkdir(parents=True, exist_ok=True)
+
+MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".html": "text/html",
+    ".json": "application/json",
+}
+
+
+@app.route("/api/campaigns/<campaign_id>/assets/<filename>", methods=["PUT"])
+def put_asset(campaign_id: str, filename: str):
+    asset_dir = _asset_root / campaign_id
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    path = asset_dir / filename
+    path.write_bytes(request.data)
+    return jsonify({"status": "ok", "path": f"/api/campaigns/{campaign_id}/assets/{filename}"}), 201
+
+
+@app.route("/api/campaigns/<campaign_id>/assets/<filename>", methods=["GET"])
+def get_asset(campaign_id: str, filename: str):
+    path = _asset_root / campaign_id / filename
+    if not path.is_file():
+        return jsonify({"error": "not found"}), 404
+    suffix = path.suffix.lower()
+    mimetype = MIME_TYPES.get(suffix, "application/octet-stream")
+    headers = {}
+    if suffix in (".png", ".jpg", ".jpeg"):
+        headers["Cache-Control"] = "public, max-age=3600"
+    return send_file(path, mimetype=mimetype), 200, headers
+
+
+@app.route("/api/campaigns/<campaign_id>/assets", methods=["DELETE"])
+def delete_assets(campaign_id: str):
+    asset_dir = _asset_root / campaign_id
+    if asset_dir.is_dir():
+        shutil.rmtree(asset_dir)
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/events/<campaign_id>", methods=["GET"])

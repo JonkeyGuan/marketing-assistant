@@ -155,7 +155,9 @@ def merge_template(template: str, theme_config: dict, style_block: str, content:
     return html
 
 
-async def generate_hero_image(campaign_name: str, hotel_name: str, theme: str, description: str = "", auth_header: str = "") -> str | None:
+async def generate_hero_image(campaign_name: str, hotel_name: str, theme: str,
+                              campaign_id: str = "", description: str = "",
+                              auth_header: str = "") -> str | None:
     try:
         from fastmcp import Client
         token = auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else None
@@ -170,6 +172,19 @@ async def generate_hero_image(campaign_name: str, hotel_name: str, theme: str, d
             })
             if result and result.content:
                 data = json.loads(result.content[0].text)
+                image_b64 = data.get("image_data_b64")
+                if image_b64 and campaign_id:
+                    try:
+                        import base64
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            await client.put(
+                                f"{settings.CAMPAIGN_API_URL}/api/campaigns/{campaign_id}/assets/hero.png",
+                                content=base64.b64decode(image_b64),
+                                headers={"Content-Type": "image/png"},
+                            )
+                        return f"/api/campaigns/{campaign_id}/assets/hero.png"
+                    except Exception as e:
+                        print(f"[Creative Producer] Image upload to campaign-api failed: {e}")
                 image_url = data.get("image_url")
                 if image_url:
                     return image_url
@@ -410,6 +425,7 @@ class CreativeProducerAgent:
                         campaign_name=params["campaign_name"],
                         hotel_name=params["hotel_name"],
                         theme=params["theme"],
+                        campaign_id=campaign_id,
                         description=params["campaign_description"],
                         auth_header=agent_headers.get("authorization", "") if agent_headers else ""
                     )
