@@ -131,6 +131,14 @@ for svc in "${SERVICES[@]}"; do
   fi
 done
 
+# Register MCP tools with MCP Gateway
+echo "  Registering MCP tools with Gateway..."
+if oc get crd mcpserverregistrations.mcp.kuadrant.io &>/dev/null; then
+  oc apply -f "$SCRIPT_DIR/infra/mcp-gateway/marketing-tools.yaml" -n "$NAMESPACE" 2>/dev/null || true
+else
+  echo "    skipped (MCP Gateway CRD not found)"
+fi
+
 # Grant kagenti-authbridge SCC for sidecar injection (after SA resources are created)
 echo "  Granting kagenti-authbridge SCC..."
 AGENT_SAS=(default campaign-director creative-producer customer-analyst policy-guardian delivery-manager)

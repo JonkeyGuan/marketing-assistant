@@ -361,6 +361,7 @@ HERO OVERLAY: Apply {chosen_overlay} on the hero section.
 ANIMATIONS: Implement {chosen_animation}. Add at least 2 @keyframes.
 
 IMPORTANT: Each generation must look distinctly different. Be creative and bold with your CSS choices.
+ABSOLUTELY NO external image URLs (no unsplash, pexels, stock photos, or any http/https image links). Use only CSS gradients, patterns, and colors for decorative backgrounds.
 
 Output format — provide BOTH sections:
 

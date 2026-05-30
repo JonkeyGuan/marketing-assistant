@@ -9,7 +9,7 @@ if __name__ == "__main__":
         "app.server:app",
         "--bind", f"0.0.0.0:{settings.PORT}",
         "--workers", "2",
-        "--threads", "2",
+        "--threads", "8",
         "--timeout", "120",
         "--no-control-socket",
     ])

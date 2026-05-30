@@ -42,7 +42,7 @@ DOMAIN=apps.cluster-xxx.sandbox.opentlc.com ./install.sh
 |----------|---------|-------------|
 | `DOMAIN` | auto-detected | OpenShift apps domain |
 | `CHART_VERSION` | `0.6.0-rc.6` | kagenti / kagenti-deps Helm chart version |
-| `MCP_GW_VERSION` | `0.4.1` | MCP Gateway chart and image version |
+| `MCP_GW_VERSION` | `0.6.0` | MCP Gateway chart and image version |
 
 ### What the Script Does
 

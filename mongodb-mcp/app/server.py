@@ -85,7 +85,24 @@ def _get_tier_config() -> tuple[str, str]:
 
 
 def filter_customers_by_user_perm(customers: list) -> list:
-    headers = get_http_headers(include={"authorization"})
+    headers = get_http_headers(include={"authorization", "x-user-roles"})
+    platinum_role, platinum_tier = _get_tier_config()
+
+    user_roles_header = ""
+    for key in headers:
+        if str(key).lower() == "x-user-roles":
+            val = headers[key]
+            user_roles_header = val[0] if isinstance(val, (list, tuple)) else (val or "")
+            break
+
+    if user_roles_header:
+        roles = [r.strip() for r in user_roles_header.split(",")]
+        logger.info("x-user-roles header: %s", roles)
+        if platinum_role in roles:
+            return customers
+        logger.info("Filtering out %s members (x-user-roles lacks '%s')", platinum_tier, platinum_role)
+        return [c for c in customers if c.get("tier") != platinum_tier]
+
     auth_ctx = parse_authorization_bearer_jwt(headers)
 
     if not auth_ctx.get("preferred_username"):
@@ -95,7 +112,6 @@ def filter_customers_by_user_perm(customers: list) -> list:
     username = auth_ctx["preferred_username"]
     roles = auth_ctx.get("roles", [])
     scope = auth_ctx.get("scope", "") or ""
-    platinum_role, platinum_tier = _get_tier_config()
     logger.info("JWT claims: preferred_username=%s roles=%s scope=%s", username, roles, scope[:80])
 
     if platinum_role in roles:

@@ -32,7 +32,7 @@ components:
     enabled: true
   # Not needed for this project
   mcpInspector:
-    enabled: false
+    enabled: true
   kiali:
     enabled: true
   phoenix:

@@ -7,7 +7,7 @@ NAMESPACE="kagenti-system"
 KC_NAMESPACE="keycloak"
 MCP_NAMESPACE="mcp-system"
 CHART_VERSION="${CHART_VERSION:-0.6.0-rc.6}"
-MCP_GW_VERSION="${MCP_GW_VERSION:-0.4.1}"
+MCP_GW_VERSION="${MCP_GW_VERSION:-0.6.0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOMAIN="${DOMAIN:-$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')}"
 
@@ -212,18 +212,34 @@ fi
 # Phase 4: Install MCP Gateway
 # ---------------------------------------------------------------------------
 echo "[4/9] Installing MCP Gateway..."
+
+MCP_GW_CHART="oci://ghcr.io/kuadrant/charts/mcp-gateway"
+MCP_GW_SETS=(
+  --set "image.tag=v${MCP_GW_VERSION}"
+  --set "gateway.publicHost=mcp-gateway-gateway-system.${DOMAIN}"
+  --set "mcpGatewayExtension.create=true"
+  --set "mcpGatewayExtension.gatewayRef.name=mcp-gateway"
+  --set "mcpGatewayExtension.gatewayRef.namespace=gateway-system"
+)
+
+# Pre-install CRDs (helm doesn't upgrade CRDs on chart upgrade)
+echo "  Installing MCP Gateway CRDs..."
+helm template mcp-gateway "$MCP_GW_CHART" --version "$MCP_GW_VERSION" \
+  -n "$MCP_NAMESPACE" --include-crds 2>/dev/null | \
+  oc apply --server-side -f - 2>/dev/null | grep -i crd || true
+
 if helm status mcp-gateway -n "$MCP_NAMESPACE" &>/dev/null; then
-  helm upgrade mcp-gateway oci://ghcr.io/kagenti/charts/mcp-gateway \
+  helm upgrade mcp-gateway "$MCP_GW_CHART" \
     --version "$MCP_GW_VERSION" \
     -n "$MCP_NAMESPACE" \
     --reset-values \
-    --set "image.tag=v${MCP_GW_VERSION}" \
+    "${MCP_GW_SETS[@]}" \
     --timeout 5m
 else
-  helm install mcp-gateway oci://ghcr.io/kagenti/charts/mcp-gateway \
+  helm install mcp-gateway "$MCP_GW_CHART" \
     --version "$MCP_GW_VERSION" \
     --create-namespace -n "$MCP_NAMESPACE" \
-    --set "image.tag=v${MCP_GW_VERSION}" \
+    "${MCP_GW_SETS[@]}" \
     --timeout 5m
 fi
 
@@ -240,6 +256,7 @@ if helm status kagenti -n "$NAMESPACE" &>/dev/null; then
     --reset-values \
     -f "$SCRIPT_DIR/values-kagenti.yaml" \
     --set "domain=$DOMAIN" \
+    --set "mcpGateway.hostname=mcp-gateway-gateway-system.${DOMAIN}" \
     --set "agentOAuthSecret.spiffePrefix=spiffe://${DOMAIN}/sa" \
     --set "agentOAuthSecret.useServiceAccountCA=false" \
     --set "uiOAuthSecret.useServiceAccountCA=false" \
@@ -251,6 +268,7 @@ else
     -n "$NAMESPACE" \
     -f "$SCRIPT_DIR/values-kagenti.yaml" \
     --set "domain=$DOMAIN" \
+    --set "mcpGateway.hostname=mcp-gateway-gateway-system.${DOMAIN}" \
     --set "agentOAuthSecret.spiffePrefix=spiffe://${DOMAIN}/sa" \
     --set "agentOAuthSecret.useServiceAccountCA=false" \
     --set "uiOAuthSecret.useServiceAccountCA=false" \
@@ -282,23 +300,24 @@ echo "  Waiting for route processor job..."
 oc wait --for=condition=Complete job/kagenti-process-routes-job \
   -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
 
-# Ensure kagenti-ui-config exists (route processor job may fail on first install)
-if ! oc get configmap kagenti-ui-config -n "$NAMESPACE" &>/dev/null; then
-  echo "  Creating kagenti-ui-config (route processor fallback)..."
-  API_ROUTE=$(oc get route kagenti-api -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
-  KC_UI_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
-  MLFLOW_ROUTE=$(oc get route mlflow -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
-  KIALI_ROUTE=$(oc get route kiali -n istio-system -o jsonpath='{.spec.host}' 2>/dev/null)
-  oc create configmap kagenti-ui-config -n "$NAMESPACE" \
-    --from-literal=DOMAIN_NAME="$DOMAIN" \
-    --from-literal=API_URL="https://${API_ROUTE}" \
-    --from-literal=KEYCLOAK_CONSOLE_URL="https://${KC_UI_ROUTE}" \
-    --from-literal=MLFLOW_DASHBOARD_URL="https://${MLFLOW_ROUTE}" \
-    --from-literal=MCP_INSPECTOR_URL="" \
-    --from-literal=MCP_PROXY_FULL_ADDRESS="" \
-    --from-literal=NETWORK_DASHBOARD_URL="https://${KIALI_ROUTE}" \
-    2>/dev/null || true
-fi
+# Ensure kagenti-ui-config exists with correct URLs (route processor job may fail on first install)
+echo "  Configuring kagenti-ui-config..."
+API_ROUTE=$(oc get route kagenti-api -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+KC_UI_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+MLFLOW_ROUTE=$(oc get route mlflow -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+KIALI_ROUTE=$(oc get route kiali -n istio-system -o jsonpath='{.spec.host}' 2>/dev/null)
+MCP_GW_ROUTE=$(oc get route mcp-gateway -n gateway-system -o jsonpath='{.spec.host}' 2>/dev/null)
+MCP_INSP_ROUTE=$(oc get route mcp-inspector -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+oc create configmap kagenti-ui-config -n "$NAMESPACE" \
+  --from-literal=DOMAIN_NAME="$DOMAIN" \
+  --from-literal=API_URL="https://${API_ROUTE}" \
+  --from-literal=KEYCLOAK_CONSOLE_URL="https://${KC_UI_ROUTE}" \
+  --from-literal=MLFLOW_DASHBOARD_URL="https://${MLFLOW_ROUTE}" \
+  --from-literal=NETWORK_DASHBOARD_URL="https://${KIALI_ROUTE}" \
+  --from-literal=NETWORK_TRAFFIC_DASHBOARD_URL="https://${KIALI_ROUTE}" \
+  --from-literal=MCP_PROXY_FULL_ADDRESS="http://mcp-gateway.$MCP_NAMESPACE.svc:8080/mcp" \
+  --from-literal=MCP_INSPECTOR_URL="https://${MCP_INSP_ROUTE}" \
+  --dry-run=client -o yaml | oc apply -f - -n "$NAMESPACE" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Phase 7: Post-install fixups
@@ -308,14 +327,6 @@ echo "[7/9] Applying post-install fixups..."
 # Deploy ambient mesh reconciler CronJob (auto-fixes pods that lose ztunnel after cluster reboot)
 echo "  Deploying ambient mesh reconciler CronJob..."
 oc apply -f "$SCRIPT_DIR/ambient-reconciler.yaml" 2>/dev/null || true
-
-# Fix Kiali URL in kagenti-ui-config (route processor doesn't know about Kiali)
-echo "  Patching Kiali URL in UI config..."
-KIALI_ROUTE=$(oc get route kiali -n istio-system -o jsonpath='{.spec.host}' 2>/dev/null)
-if [ -n "$KIALI_ROUTE" ]; then
-  oc patch configmap kagenti-ui-config -n "$NAMESPACE" --type=merge \
-    -p "{\"data\":{\"NETWORK_DASHBOARD_URL\":\"https://${KIALI_ROUTE}\"}}" 2>/dev/null || true
-fi
 
 # Fix MLflow OIDC: discovery URL must use external Keycloak route (not internal svc)
 echo "  Patching MLflow OIDC discovery URL..."

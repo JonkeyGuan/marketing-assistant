@@ -64,15 +64,22 @@ class CampaignStore:
     def sync(self, campaign_id: str):
         if not self._api_url or campaign_id not in self._store:
             return
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                client.put(
-                    f"{self._api_url}/api/campaigns/{campaign_id}",
-                    content=self._serialize(self._store[campaign_id]).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-        except Exception as e:
-            logger.warning("Failed to sync campaign %s to API: %s", campaign_id, e)
+        import time
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.put(
+                        f"{self._api_url}/api/campaigns/{campaign_id}",
+                        content=self._serialize(self._store[campaign_id]).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    if resp.status_code < 500:
+                        return
+                    logger.warning("Sync campaign %s: %s (attempt %d)", campaign_id, resp.status_code, attempt + 1)
+            except Exception as e:
+                logger.warning("Sync campaign %s failed (attempt %d): %s", campaign_id, attempt + 1, e)
+            if attempt < 2:
+                time.sleep(2)
 
     def __setitem__(self, key, value):
         self._store[key] = value
