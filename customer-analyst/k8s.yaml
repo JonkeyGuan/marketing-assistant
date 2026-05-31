@@ -7,7 +7,7 @@ metadata:
 data:
   PORT: "8084"
   AGENT_ENDPOINT: "http://customer-analyst:8084"
-  MONGODB_MCP_URL: "http://mcp-gateway-istio.gateway-system.svc:8080"
+  MONGODB_MCP_URL: "http://mcp-gateway-istio.gateway-system.svc:8090"
   EVENT_HUB_URL: "http://event-hub:8080"
   CONFIG_SERVICE_URL: "http://config-service:8081"
   LOG_LEVEL: "INFO"

@@ -204,9 +204,11 @@ oc annotate namespace gateway-system \
   --overwrite 2>/dev/null || true
 
 MCP_GW_CHART="oci://ghcr.io/kuadrant/charts/mcp-gateway"
+MCP_GW_PORT="${MCP_GW_PORT:-8090}"
 MCP_GW_SETS=(
   --set "image.tag=v${MCP_GW_VERSION}"
   --set "gateway.publicHost=mcp-gateway-gateway-system.${DOMAIN}"
+  --set "gateway.port=${MCP_GW_PORT}"
   --set "gateway.internalHostPattern=*.svc.cluster.local"
   --set "mcpGatewayExtension.create=true"
   --set "mcpGatewayExtension.gatewayRef.name=mcp-gateway"
@@ -255,6 +257,7 @@ if helm status kagenti -n "$NAMESPACE" &>/dev/null; then
     --set "domain=$DOMAIN" \
     --set "mcpGateway.hostname=mcp-gateway-gateway-system.${DOMAIN}" \
     --set "agentOAuthSecret.spiffePrefix=spiffe://${DOMAIN}/sa" \
+    --set "signatureVerification.spireTrustDomain=${DOMAIN}" \
     --set "agentOAuthSecret.useServiceAccountCA=false" \
     --set "uiOAuthSecret.useServiceAccountCA=false" \
     --no-hooks \
@@ -267,6 +270,7 @@ else
     --set "domain=$DOMAIN" \
     --set "mcpGateway.hostname=mcp-gateway-gateway-system.${DOMAIN}" \
     --set "agentOAuthSecret.spiffePrefix=spiffe://${DOMAIN}/sa" \
+    --set "signatureVerification.spireTrustDomain=${DOMAIN}" \
     --set "agentOAuthSecret.useServiceAccountCA=false" \
     --set "uiOAuthSecret.useServiceAccountCA=false" \
     --no-hooks \

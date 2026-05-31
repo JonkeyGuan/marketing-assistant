@@ -116,17 +116,46 @@ Effective Permissions = User Permissions ∩ Agent Capabilities
 | OPA permission intersection | ✅ Demo only | Implemented in redhat-et/zero-trust-agent-demo, not part of kagenti |
 | Transactional tokens | 🔄 Planned | Kagenti team mentioned as future direction |
 
+### Token Exchange Experiment (Verified 2026-05-31)
+
+We tested the full AuthBridge token exchange pipeline end-to-end:
+
+**Setup:**
+
+1. MCP Gateway port changed from 8080 to 8090 — proxy-init excludes port 8080 (`OUTBOUND_PORTS_EXCLUDE`) because agents listen on 8080; port 8090 is intercepted by envoy-proxy
+2. SPIFFE trust domain fixed from `localtest.me` to actual cluster domain (`signatureVerification.spireTrustDomain` in kagenti Helm chart)
+3. Created `mcp-gateway` Keycloak client (target audience) + `mcp-gateway-aud` scope with audience mapper
+4. Assigned `mcp-gateway-aud` + `roles` scope to all agent SPIFFE clients
+5. Created `authproxy-routes` ConfigMap with `host: mcp-gateway-istio.gateway-system.svc, target_audience: mcp-gateway`
+
+**Results:**
+
+| Step | Result |
+|------|--------|
+| iptables intercepts outbound to port 8090 | ✅ |
+| envoy-proxy matches host in routes.yaml | ✅ |
+| envoy ext_proc calls Keycloak token exchange | ✅ |
+| Keycloak returns exchanged token (`aud: mcp-gateway`) | ✅ |
+| Exchanged token has `preferred_username: alice` | ✅ |
+| **Exchanged token has `realm_access.roles`** | **❌ Empty** |
+
+**Root cause:** Keycloak's standard token exchange (RFC 8693) does not execute protocol mappers during the exchange grant type. Both `oidc-usermodel-realm-role-mapper` (`realm_access.roles`) and `oidc-group-membership-mapper` (`groups`) produce empty claims in the exchanged token. The scopes are correctly assigned to the target client with the right mappers — Keycloak simply skips mapper execution for the token exchange grant.
+
+The redhat-et/zero-trust-agent-demo uses `groups` claim (not `realm_access.roles`) for permission intersection, but faces the same limitation — the demo's AuthBridge integration (ADR-0010, status: Proposed) has not resolved this at the Keycloak level.
+
+**Conclusion:** Token exchange works mechanically but loses all user attribute claims, breaking per-user authorization. Rolled back `authproxy-routes` — JWT passthrough remains the correct approach.
+
 ### Why We Use JWT Passthrough
 
-We disabled AuthBridge outbound token exchange (`authproxy-routes` not configured) because:
+AuthBridge outbound token exchange (`authproxy-routes`) is not configured because:
 
-1. **Roles may be lost**: Keycloak's standard token exchange filters client scopes based on the target audience. If the target client's scope configuration doesn't include realm role mappers, `realm_access.roles` can be stripped. This is a configuration challenge — not an absolute limitation — but requires careful per-client scope setup that is fragile across upgrades.
+1. **All user claims are lost** (verified): Keycloak's standard token exchange does not execute protocol mappers (`oidc-usermodel-realm-role-mapper`, `oidc-group-membership-mapper`). The exchanged token's `realm_access.roles` and `groups` are empty regardless of client scope configuration. The redhat-et/zero-trust-agent-demo faces the same limitation.
 
-2. **No delegation identity**: AuthBridge's current token exchange replaces the user JWT with an audience-scoped token. The exchanged token identifies the **agent** (via SPIFFE), not the **user who delegated**. Without nested `act` claims, per-user authorization (alice vs bob) cannot be enforced downstream.
+2. **No delegation identity**: The exchanged token's `sub` is the original user, but `azp` becomes the agent's SPIFFE ID. Without nested `act` claims, there is no cryptographic proof of the delegation chain.
 
-3. **No permission intersection engine**: Even if tokens carried delegation context, there is no policy engine (OPA or otherwise) integrated into kagenti to compute permission intersections at each hop.
+3. **No permission intersection engine**: No OPA or policy engine integrated into kagenti to compute per-hop permission intersections.
 
-JWT passthrough preserves the original user JWT (with `realm_access.roles`) at every hop. Combined with application-level `filter_customers_by_user_perm()`, this is the correct interim approach until kagenti integrates delegation into AuthBridge.
+JWT passthrough preserves the original user JWT (with `realm_access.roles`) at every hop. Combined with application-level `filter_customers_by_user_perm()`, this is the correct interim approach until Keycloak supports role propagation in token exchange or kagenti implements nested `act` claims.
 
 ## MCP Gateway for Tools
 
@@ -136,9 +165,11 @@ MCP Gateway v0.7.0 introduced `MCPGatewayExtension` which auto-creates:
 - `mcp-gateway-route` HTTPRoute → routes `/mcp` to the broker
 - EnvoyFilter → ext_proc for MCP protocol parsing and tool call routing
 
-Agents connect to the Gateway envoy (`mcp-gateway-istio.gateway-system.svc:8080/mcp`). The ext_proc router parses `tools/call` requests and routes them to the correct backend MCP server via Istio.
+Agents connect to the Gateway envoy (`mcp-gateway-istio.gateway-system.svc:8090/mcp`). The ext_proc router parses `tools/call` requests and routes them to the correct backend MCP server via Istio.
 
-**Current usage**: Agents call tools through Gateway (`mcp-gateway-istio.gateway-system.svc:8080/mcp`). MCP Inspector browses tools via broker. Agent code defaults to `localhost` for local dev; k8s.yaml overrides point to the Gateway address.
+**Current usage**: Agents call tools through Gateway (`mcp-gateway-istio.gateway-system.svc:8090/mcp`). MCP Inspector browses tools via broker. Agent code defaults to `localhost` for local dev; k8s.yaml overrides point to the Gateway address.
+
+**Port 8090 (not 8080)**: AuthBridge's proxy-init excludes port 8080 from iptables outbound redirection (`OUTBOUND_PORTS_EXCLUDE`) because agents listen on 8080. MCP Gateway uses port 8090 so that outbound traffic to the Gateway can be intercepted by envoy-proxy for future token exchange.
 
 ### Agent-to-Tool Flow
 
@@ -347,16 +378,17 @@ creative-producer (only needs to generate HTML) and customer-analyst (needs cust
 
 **Why not now**: Requires a permission intersection engine to scope each agent's effective permissions. The zero-trust-agent-demo uses OPA for this, but it's a standalone component not part of kagenti. Without delegation identity (gap #1), there is no token-level mechanism to restrict what an agent can do independently of the user's roles. Istio AuthorizationPolicy provides namespace-level isolation (tools only accept traffic from gateway-system), but not per-agent capability scoping.
 
-**3. Keycloak token exchange and roles**
+**3. Keycloak token exchange and roles (verified)**
 
-Keycloak's [standard token exchange](https://www.keycloak.org/2025/05/standard-token-exchange-kc-26-2) (26.2+) performs client scope filtering based on the target audience. If the target client's scope doesn't include realm role mappers, `realm_access.roles` may be stripped from the exchanged token. This is a configuration challenge rather than an absolute limitation — but requires careful per-client scope setup.
+Keycloak's [standard token exchange](https://www.keycloak.org/2025/05/standard-token-exchange-kc-26-2) (26.2+) does not execute `oidc-usermodel-realm-role-mapper` during the exchange grant type. We verified this end-to-end: created a `mcp-gateway` target client with the `roles` scope (containing the realm role mapper) correctly assigned, performed a successful token exchange — the exchanged token had `preferred_username: alice` but `realm_access.roles` was empty. This is Keycloak behavior, not a scope configuration issue.
 
-**Why not now**: Correct scope configuration could preserve realm roles in exchanged tokens, but AuthBridge's outbound exchange still replaces the user identity with the agent's SPIFFE identity. Even with roles preserved, there's no `act` claim to indicate "this agent is acting on behalf of alice" — the downstream service sees the agent, not the user. JWT passthrough sidesteps both issues by keeping the original user token intact.
+**Why not now**: `realm_access.roles` cannot be preserved through standard token exchange regardless of configuration. JWT passthrough is the only way to maintain per-user role-based authorization (alice's `platinum-access` vs bob's lack thereof).
 
 ### Current Approach is Correct
 
 JWT passthrough + application-level `filter_customers_by_user_perm()` is the practical interim solution. The path to full zero trust requires three things to converge:
-1. Keycloak supports delegation semantics (`act` claims) in token exchange
+
+1. Keycloak executes realm role mappers during token exchange (or supports `act` claims with role delegation)
 2. Kagenti AuthBridge integrates nested `act` claims into outbound exchange
 3. A permission intersection engine (OPA or similar) is integrated into the platform
 
