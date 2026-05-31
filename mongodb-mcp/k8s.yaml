@@ -8,6 +8,7 @@ data:
   PORT: "8082"
   MONGODB_DATABASE: "casino_crm"
   CONFIG_SERVICE_URL: "http://config-service:8081"
+  ALLOW_JWT_FALLBACK: "true"
   LOG_LEVEL: "INFO"
 ---
 apiVersion: v1
@@ -126,7 +127,7 @@ spec:
     namespace: gateway-system
     sectionName: mcps
   hostnames:
-  - mongodb-mcp.mcp-system.svc.cluster.local
+  - mongodb-mcp.marketing.svc.cluster.local
   rules:
   - backendRefs:
     - name: mongodb-mcp
@@ -142,3 +143,38 @@ spec:
     kind: HTTPRoute
     name: mongodb-mcp-route
   path: /mcp
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: mongodb-mcp-auth
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mongodb-mcp-route
+  rules:
+    authentication:
+      keycloak-jwt:
+        jwt:
+          issuerUrl: <TODO_KC_ISSUER>
+    response:
+      success:
+        headers:
+          x-user-roles:
+            plain:
+              expression: "auth.identity.realm_access.roles.join(',')"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mongodb-mcp-gateway-only
+spec:
+  selector:
+    matchLabels:
+      app: mongodb-mcp
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["gateway-system", "mcp-system", "kagenti-system"]

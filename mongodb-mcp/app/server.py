@@ -103,16 +103,22 @@ def filter_customers_by_user_perm(customers: list) -> list:
         logger.info("Filtering out %s members (x-user-roles lacks '%s')", platinum_tier, platinum_role)
         return [c for c in customers if c.get("tier") != platinum_tier]
 
+    if not settings.ALLOW_JWT_FALLBACK:
+        logger.warning("No x-user-roles header and JWT fallback disabled — access denied")
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData, INTERNAL_ERROR
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message="Access denied: missing authorization headers"))
+
     auth_ctx = parse_authorization_bearer_jwt(headers)
 
     if not auth_ctx.get("preferred_username"):
-        logger.info("No JWT token received — returning unfiltered data")
+        logger.info("No JWT token received (fallback mode) — returning unfiltered data")
         return customers
 
     username = auth_ctx["preferred_username"]
     roles = auth_ctx.get("roles", [])
     scope = auth_ctx.get("scope", "") or ""
-    logger.info("JWT claims: preferred_username=%s roles=%s scope=%s", username, roles, scope[:80])
+    logger.info("JWT fallback: preferred_username=%s roles=%s scope=%s", username, roles, scope[:80])
 
     if platinum_role in roles:
         logger.info("%s has '%s' role (realm_access) — full access", username, platinum_role)

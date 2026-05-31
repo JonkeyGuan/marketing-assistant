@@ -120,8 +120,8 @@ export default function CampaignCreate() {
     hotel_name: vcfg.properties[0] || 'Simon Casino Resort',
     target_audience: '',
     theme: 'luxury_gold',
-    start_date: '',
-    end_date: ''
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
   });
   const [campaignState, setCampaignState] = useState<CampaignState>({
     status: 'draft'

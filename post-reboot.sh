@@ -139,6 +139,21 @@ reconcile_namespace() {
 reconcile_namespace "$PLATFORM_NS"
 reconcile_namespace "$APP_NS"
 
+# ---------------------------------------------------------------------------
+# Restart MCP Gateway broker (reconnect to tools after ztunnel reset)
+# ---------------------------------------------------------------------------
+MCP_NS="mcp-system"
+echo "--- MCP Gateway ---"
+if oc get deployment mcp-gateway -n "$MCP_NS" &>/dev/null; then
+  echo "  Restarting mcp-gateway broker..."
+  oc rollout restart deployment/mcp-gateway -n "$MCP_NS" 2>/dev/null || true
+  oc rollout status deployment/mcp-gateway -n "$MCP_NS" --timeout="${TIMEOUT}s" 2>/dev/null || \
+    echo "  WARNING: mcp-gateway did not become ready within ${TIMEOUT}s"
+else
+  echo "  MCP Gateway not found, skipping."
+fi
+echo ""
+
 echo "=== Reconciliation complete ==="
 echo ""
 echo "Pod status ($APP_NS):"

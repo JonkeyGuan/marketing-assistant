@@ -6,8 +6,8 @@ set -euo pipefail
 NAMESPACE="kagenti-system"
 KC_NAMESPACE="keycloak"
 MCP_NAMESPACE="mcp-system"
-CHART_VERSION="${CHART_VERSION:-0.6.0-rc.6}"
-MCP_GW_VERSION="${MCP_GW_VERSION:-0.6.0}"
+CHART_VERSION="${CHART_VERSION:-0.6.0-rc.11}"
+MCP_GW_VERSION="${MCP_GW_VERSION:-0.7.0-rc2}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOMAIN="${DOMAIN:-$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')}"
 
@@ -28,11 +28,14 @@ echo ""
 echo "[0/9] Pre-flight checks..."
 
 echo "  Labeling namespaces for Helm adoption..."
-for ns in istio-system gateway-system; do
+# istio-system is owned by kagenti-deps; gateway-system is owned by kagenti
+for ns_owner in "istio-system:kagenti-deps" "gateway-system:kagenti"; do
+  ns="${ns_owner%%:*}"
+  owner="${ns_owner##*:}"
   if oc get namespace "$ns" &>/dev/null; then
     oc label namespace "$ns" app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
     oc annotate namespace "$ns" \
-      meta.helm.sh/release-name=kagenti-deps \
+      meta.helm.sh/release-name="$owner" \
       meta.helm.sh/release-namespace="$NAMESPACE" \
       --overwrite 2>/dev/null || true
   fi
@@ -137,29 +140,6 @@ for doc in yaml.safe_load_all(sys.stdin):
 " | oc apply -f - 2>/dev/null || true
 fi
 
-echo "  Enabling IstioCNI ambient reconciliation (fixes HBONE after cluster restart)..."
-oc patch istiocni default --type=merge -p '{
-  "spec": {
-    "values": {
-      "cni": {
-        "ambient": {"reconcileIptablesOnStartup": true},
-        "istioOwnedCNIConfig": true
-      }
-    }
-  }
-}' 2>/dev/null || true
-
-# OSSM 3.3.3 CRD doesn't expose ambient.enableAmbientDetectionRetry (available since Istio 1.28.4,
-# default true in 1.29). Patch the DaemonSet env directly — explicit env overrides envFrom ConfigMap
-# and survives operator reconciliation. Without this, CNI agent gives up on first netns cache miss
-# after cluster restart, leaving sidecar pods without ztunnel HBONE rules.
-echo "  Enabling ambient detection retry on istio-cni DaemonSet..."
-if ! oc get daemonset istio-cni-node -n istio-cni -o jsonpath='{.spec.template.spec.containers[?(@.name=="install-cni")].env[*].name}' 2>/dev/null | grep -q ENABLE_AMBIENT_DETECTION_RETRY; then
-  oc patch daemonset istio-cni-node -n istio-cni --type=json \
-    -p '[{"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"ENABLE_AMBIENT_DETECTION_RETRY","value":"true"}}]' \
-    2>/dev/null || true
-fi
-
 echo "  Waiting for Keycloak to become ready..."
 oc wait --for=condition=Ready pod -l app=keycloak \
   -n "$KC_NAMESPACE" --timeout=600s 2>/dev/null || \
@@ -213,20 +193,37 @@ fi
 # ---------------------------------------------------------------------------
 echo "[4/9] Installing MCP Gateway..."
 
+# Ensure gateway-system namespace exists with Helm labels (shared by mcp-gateway and kagenti charts)
+if ! oc get namespace gateway-system &>/dev/null; then
+  oc create namespace gateway-system 2>/dev/null || true
+fi
+oc label namespace gateway-system app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+oc annotate namespace gateway-system \
+  meta.helm.sh/release-name=kagenti \
+  meta.helm.sh/release-namespace="$NAMESPACE" \
+  --overwrite 2>/dev/null || true
+
 MCP_GW_CHART="oci://ghcr.io/kuadrant/charts/mcp-gateway"
 MCP_GW_SETS=(
   --set "image.tag=v${MCP_GW_VERSION}"
   --set "gateway.publicHost=mcp-gateway-gateway-system.${DOMAIN}"
+  --set "gateway.internalHostPattern=*.svc.cluster.local"
   --set "mcpGatewayExtension.create=true"
   --set "mcpGatewayExtension.gatewayRef.name=mcp-gateway"
   --set "mcpGatewayExtension.gatewayRef.namespace=gateway-system"
 )
 
-# Pre-install CRDs (helm doesn't upgrade CRDs on chart upgrade)
+# Pre-install CRDs only (helm doesn't upgrade CRDs on chart upgrade)
 echo "  Installing MCP Gateway CRDs..."
 helm template mcp-gateway "$MCP_GW_CHART" --version "$MCP_GW_VERSION" \
   -n "$MCP_NAMESPACE" --include-crds 2>/dev/null | \
-  oc apply --server-side -f - 2>/dev/null | grep -i crd || true
+  python3 -c "
+import sys, yaml
+for doc in yaml.safe_load_all(sys.stdin):
+    if doc and doc.get('kind') == 'CustomResourceDefinition':
+        yaml.dump(doc, sys.stdout, default_flow_style=False)
+        print('---')
+" | oc apply --server-side -f - 2>/dev/null || true
 
 if helm status mcp-gateway -n "$MCP_NAMESPACE" &>/dev/null; then
   helm upgrade mcp-gateway "$MCP_GW_CHART" \
@@ -315,7 +312,7 @@ oc create configmap kagenti-ui-config -n "$NAMESPACE" \
   --from-literal=MLFLOW_DASHBOARD_URL="https://${MLFLOW_ROUTE}" \
   --from-literal=NETWORK_DASHBOARD_URL="https://${KIALI_ROUTE}" \
   --from-literal=NETWORK_TRAFFIC_DASHBOARD_URL="https://${KIALI_ROUTE}" \
-  --from-literal=MCP_PROXY_FULL_ADDRESS="http://mcp-gateway.$MCP_NAMESPACE.svc:8080/mcp" \
+  --from-literal=MCP_PROXY_FULL_ADDRESS="https://${MCP_GW_ROUTE}/mcp" \
   --from-literal=MCP_INSPECTOR_URL="https://${MCP_INSP_ROUTE}" \
   --dry-run=client -o yaml | oc apply -f - -n "$NAMESPACE" 2>/dev/null || true
 
@@ -324,9 +321,16 @@ oc create configmap kagenti-ui-config -n "$NAMESPACE" \
 # ---------------------------------------------------------------------------
 echo "[7/9] Applying post-install fixups..."
 
-# Deploy ambient mesh reconciler CronJob (auto-fixes pods that lose ztunnel after cluster reboot)
-echo "  Deploying ambient mesh reconciler CronJob..."
-oc apply -f "$SCRIPT_DIR/ambient-reconciler.yaml" 2>/dev/null || true
+# Create Kuadrant CR (enables AuthPolicy enforcement)
+echo "  Creating Kuadrant CR..."
+oc apply -f - <<'KUADRANTEOF' 2>/dev/null || true
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+  namespace: kagenti-system
+spec: {}
+KUADRANTEOF
 
 # Fix MLflow OIDC: discovery URL must use external Keycloak route (not internal svc)
 echo "  Patching MLflow OIDC discovery URL..."
@@ -372,6 +376,135 @@ if [ -n "$KC_ROUTE" ]; then
   oc patch configmap authbridge-config -n "$NAMESPACE" --type=merge \
     -p "{\"data\":{\"ISSUER\":\"https://${KC_ROUTE}/realms/kagenti\",\"EXPECTED_AUDIENCE\":\"kagenti-ui\",\"JWT_AUDIENCE\":\"kagenti-ui\",\"KEYCLOAK_URL\":\"http://keycloak.keycloak.svc.cluster.local:8080\",\"TOKEN_URL\":\"http://keycloak.keycloak.svc.cluster.local:8080/realms/kagenti/protocol/openid-connect/token\"}}" \
     2>/dev/null || true
+fi
+
+# MCP Inspector OAuth setup:
+# 1. Remove DANGEROUSLY_OMIT_AUTH (enable Inspector native OAuth + proxy session token)
+# 2. Create mcp-inspector Keycloak client (public, PKCE)
+# 3. Enable Anonymous DCR on Keycloak (Inspector discovers client via OAuth flow)
+# 4. Configure oauthProtectedResource on MCPGatewayExtension
+# 5. Add AuthPolicy on broker route (returns 401 to trigger OAuth discovery)
+echo "  Configuring MCP Inspector OAuth..."
+KC_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+INSPECTOR_HOST=$(oc get route mcp-inspector -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+PROXY_HOST=$(oc get route mcp-proxy -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+MCP_GW_ROUTE=$(oc get route mcp-gateway -n gateway-system -o jsonpath='{.spec.host}' 2>/dev/null)
+
+if [ -n "$KC_ROUTE" ] && [ -n "$INSPECTOR_HOST" ] && oc get deployment mcp-inspector -n "$NAMESPACE" &>/dev/null; then
+  # 1. Keep DANGEROUSLY_OMIT_AUTH=true (skip proxy session token).
+  # Security is enforced by MCP Gateway AuthPolicy (JWT required) — the proxy
+  # token adds friction without meaningful protection on top of OAuth + Keycloak.
+
+  # 2. Create mcp-inspector Keycloak client
+  KC_ADMIN_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_ADMIN_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  KC_ADMIN_TOKEN=$(curl -sk -X POST "https://${KC_ROUTE}/realms/master/protocol/openid-connect/token" \
+    -d "client_id=admin-cli" -d "username=${KC_ADMIN_USER}" -d "password=${KC_ADMIN_PASS}" \
+    -d "grant_type=password" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
+
+  if [ -n "$KC_ADMIN_TOKEN" ]; then
+    KC_REALM_API="https://${KC_ROUTE}/admin/realms/kagenti"
+    EXISTING=$(curl -sk -H "Authorization: Bearer ${KC_ADMIN_TOKEN}" \
+      "${KC_REALM_API}/clients?clientId=mcp-inspector" 2>/dev/null | \
+      python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
+    if [ "$EXISTING" = "0" ]; then
+      curl -sk -X POST "${KC_REALM_API}/clients" \
+        -H "Authorization: Bearer ${KC_ADMIN_TOKEN}" -H "Content-Type: application/json" \
+        -d "{\"clientId\":\"mcp-inspector\",\"enabled\":true,\"publicClient\":true,
+             \"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,
+             \"redirectUris\":[\"https://${INSPECTOR_HOST}/*\",\"https://${PROXY_HOST}/*\"],
+             \"webOrigins\":[\"https://${INSPECTOR_HOST}\",\"https://${PROXY_HOST}\",\"*\"],
+             \"attributes\":{\"pkce.code.challenge.method\":\"S256\"}}" 2>/dev/null
+      echo "    Created mcp-inspector Keycloak client"
+    else
+      echo "    mcp-inspector client already exists"
+    fi
+
+    # 3. Enable Anonymous DCR (remove trusted-hosts policy)
+    TRUSTED_HOST_ID=$(curl -sk -H "Authorization: Bearer ${KC_ADMIN_TOKEN}" \
+      "${KC_REALM_API}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" 2>/dev/null | \
+      python3 -c "
+import sys,json
+for p in json.load(sys.stdin):
+    if p.get('providerId') == 'trusted-hosts' and p.get('subType') == 'anonymous':
+        print(p['id'])
+" 2>/dev/null)
+    if [ -n "$TRUSTED_HOST_ID" ]; then
+      curl -sk -X DELETE "${KC_REALM_API}/components/${TRUSTED_HOST_ID}" \
+        -H "Authorization: Bearer ${KC_ADMIN_TOKEN}" 2>/dev/null
+      echo "    Enabled Anonymous DCR (removed trusted-hosts policy)"
+    else
+      echo "    Anonymous DCR already enabled"
+    fi
+  else
+    echo "    WARNING: Could not get Keycloak admin token"
+  fi
+
+  # 4. Configure oauthProtectedResource on MCPGatewayExtension
+  if [ -n "$MCP_GW_ROUTE" ]; then
+    MCPGWE_NAME=$(oc get mcpgatewayextensions -n "$MCP_NAMESPACE" -o name 2>/dev/null | head -1)
+    if [ -n "$MCPGWE_NAME" ]; then
+      oc patch "$MCPGWE_NAME" -n "$MCP_NAMESPACE" --type merge -p "
+spec:
+  oauthProtectedResource:
+    resourceName: MCP Gateway
+    resource: https://${MCP_GW_ROUTE}/mcp
+    authorizationServers:
+      - https://${KC_ROUTE}/realms/kagenti
+    bearerMethodsSupported:
+      - header
+    scopesSupported:
+      - openid
+      - profile
+      - email
+" 2>/dev/null && echo "    Configured oauthProtectedResource"
+    fi
+  fi
+
+  # 5. AuthPolicy on broker route (401 triggers Inspector OAuth discovery)
+  BROKER_ROUTE=$(oc get httproute mcp-gateway-route -n "$MCP_NAMESPACE" -o name 2>/dev/null)
+  if [ -n "$BROKER_ROUTE" ]; then
+    cat <<AUTHEOF | oc apply -f - 2>/dev/null
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: mcp-gateway-auth
+  namespace: $MCP_NAMESPACE
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-gateway-route
+  rules:
+    authentication:
+      keycloak-jwt:
+        jwt:
+          issuerUrl: https://${KC_ROUTE}/realms/kagenti
+        when:
+        - predicate: "request.method != 'OPTIONS'"
+        - predicate: "!request.path.contains('/.well-known')"
+      anonymous-preflight:
+        anonymous: {}
+        when:
+        - predicate: "request.method == 'OPTIONS'"
+      anonymous-wellknown:
+        anonymous: {}
+        when:
+        - predicate: "request.path.contains('/.well-known')"
+    response:
+      success:
+        headers:
+          x-user-roles:
+            plain:
+              expression: "auth.identity.realm_access.roles.join(',')"
+            when:
+            - predicate: "request.method != 'OPTIONS'"
+            - predicate: "!request.path.contains('/.well-known')"
+AUTHEOF
+    echo "    Created broker AuthPolicy"
+  fi
+else
+  echo "    skipped (Inspector or Keycloak not available)"
 fi
 
 # Fix kagenti-manager-role: add list/watch for serviceaccounts (chart only ships create/get/update)

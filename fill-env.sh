@@ -31,6 +31,10 @@ if [ -z "$CLUSTER_DOMAIN" ]; then
 fi
 echo "  CLUSTER_DOMAIN: $CLUSTER_DOMAIN"
 
+KC_ROUTE=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null)
+KC_ISSUER="https://${KC_ROUTE}/realms/kagenti"
+echo "  KC_ISSUER: $KC_ISSUER"
+
 echo "Gathering model tokens..."
 
 get_token() {
@@ -79,7 +83,7 @@ for svc_dir in "$SCRIPT_DIR"/*/; do
 
   [ ! -f "$src" ] && continue
 
-  if ! grep -q '<TODO>' "$src" 2>/dev/null; then
+  if ! grep -q '<TODO' "$src" 2>/dev/null; then
     cp "$src" "$dst"
     echo "  $svc: copied (no TODOs)"
     continue
@@ -91,6 +95,7 @@ for svc_dir in "$SCRIPT_DIR"/*/; do
     -e "s|CLUSTER_DOMAIN: \"<TODO>\"|CLUSTER_DOMAIN: \"$CLUSTER_DOMAIN\"|g" \
     -e "s|namespace: \"<TODO>\"|namespace: \"$NAMESPACE\"|g" \
     -e "s|MODEL_API_KEY: \"<TODO>\"|MODEL_API_KEY: \"$TOKEN\"|g" \
+    -e "s|<TODO_KC_ISSUER>|$KC_ISSUER|g" \
     "$src" > "$dst"
 
   echo "  $svc: generated"

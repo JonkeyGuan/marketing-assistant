@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import Dashboard from './pages/Dashboard';
 import Inbox from './pages/Inbox';
 import CampaignCreate from './pages/CampaignCreate';
+import Token from './pages/Token';
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -19,6 +20,7 @@ function App() {
         <Route path="/campaign/create" element={<CampaignCreate />} />
         <Route path="/campaign/:campaignId" element={<CampaignCreate />} />
           <Route path="/inbox" element={<Inbox />} />
+        <Route path="/token" element={<Token />} />
         <Route path="/create" element={<Navigate to="/campaign/create" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

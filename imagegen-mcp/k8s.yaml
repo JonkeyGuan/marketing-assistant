@@ -131,7 +131,7 @@ spec:
     namespace: gateway-system
     sectionName: mcps
   hostnames:
-  - imagegen-mcp.mcp-system.svc.cluster.local
+  - imagegen-mcp.marketing.svc.cluster.local
   rules:
   - backendRefs:
     - name: imagegen-mcp
@@ -147,3 +147,17 @@ spec:
     kind: HTTPRoute
     name: imagegen-mcp-route
   path: /mcp
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: imagegen-mcp-gateway-only
+spec:
+  selector:
+    matchLabels:
+      app: imagegen-mcp
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["gateway-system", "mcp-system", "kagenti-system"]

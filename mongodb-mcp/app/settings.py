@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     MONGODB_URI: str = "mongodb://localhost:27017"
     MONGODB_DATABASE: str = "casino_crm"
     CONFIG_SERVICE_URL: str = "http://localhost:8081"
+    ALLOW_JWT_FALLBACK: bool = False
     LOG_LEVEL: str = "INFO"
 
     class Config:
