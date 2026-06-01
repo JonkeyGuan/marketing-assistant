@@ -569,8 +569,20 @@ fi
 # ---------------------------------------------------------------------------
 echo "[8/9] Cleaning up Keycloak realm users..."
 KC_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
-KC_BOOTSTRAP_USER=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
-KC_BOOTSTRAP_PASS=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+
+# Try keycloak-admin first (exists on re-install), fall back to keycloak-initial-admin
+KC_BOOTSTRAP_USER=""
+KC_BOOTSTRAP_PASS=""
+if oc get secret keycloak-admin -n "$KC_NAMESPACE" &>/dev/null; then
+  KC_BOOTSTRAP_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_BOOTSTRAP_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  echo "  Using keycloak-admin secret (re-install)."
+fi
+if [ -z "$KC_BOOTSTRAP_USER" ] && oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" &>/dev/null; then
+  KC_BOOTSTRAP_USER=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_BOOTSTRAP_PASS=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  echo "  Using keycloak-initial-admin secret (fresh install)."
+fi
 
 if [ -n "$KC_ROUTE" ] && [ -n "$KC_BOOTSTRAP_USER" ]; then
   KC_TOKEN=$(curl -sk -X POST "https://${KC_ROUTE}/realms/master/protocol/openid-connect/token" \
@@ -584,7 +596,7 @@ if [ -n "$KC_ROUTE" ] && [ -n "$KC_BOOTSTRAP_USER" ]; then
     KC_REALM_API="https://${KC_ROUTE}/admin/realms/kagenti"
     ADMIN_PASS="$(openssl rand -hex 16)"
 
-    # --- master realm: create admin user ---
+    # --- master realm: create or reset admin user ---
     MASTER_ADMIN_UID=$(curl -sk -H "Authorization: Bearer ${KC_TOKEN}" \
       "${MASTER_API}/users?username=admin&exact=true" 2>/dev/null | \
       python3 -c "import sys,json; u=json.load(sys.stdin); print(u[0]['id'] if u else '')" 2>/dev/null || echo "")
@@ -615,12 +627,18 @@ if [ -n "$KC_ROUTE" ] && [ -n "$KC_BOOTSTRAP_USER" ]; then
       fi
     fi
 
-    # --- kagenti realm: reset admin password (same password) ---
+    # --- kagenti realm: create or reset admin user ---
     ADMIN_UID=$(curl -sk -H "Authorization: Bearer ${KC_TOKEN}" \
       "${KC_REALM_API}/users?username=admin&exact=true" 2>/dev/null | \
       python3 -c "import sys,json; u=json.load(sys.stdin); print(u[0]['id'] if u else '')" 2>/dev/null || echo "")
 
-    if [ -n "$ADMIN_UID" ]; then
+    if [ -z "$ADMIN_UID" ]; then
+      curl -sk -X POST "${KC_REALM_API}/users" \
+        -H "Authorization: Bearer ${KC_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"admin\",\"enabled\":true,\"credentials\":[{\"type\":\"password\",\"value\":\"${ADMIN_PASS}\",\"temporary\":false}]}" 2>/dev/null
+      echo "  Created admin in kagenti realm."
+    else
       curl -sk -X PUT "${KC_REALM_API}/users/${ADMIN_UID}/reset-password" \
         -H "Authorization: Bearer ${KC_TOKEN}" \
         -H "Content-Type: application/json" \
@@ -640,7 +658,7 @@ if [ -n "$KC_ROUTE" ] && [ -n "$KC_BOOTSTRAP_USER" ]; then
       fi
     done
 
-    # Delete old chart-generated secrets and create keycloak-admin
+    # Create keycloak-admin secret (delete old chart secrets first)
     oc delete secret kagenti-test-user -n "$KC_NAMESPACE" --ignore-not-found 2>/dev/null
     oc delete secret kagenti-test-users -n "$KC_NAMESPACE" --ignore-not-found 2>/dev/null
     oc delete secret kagenti-admin -n "$KC_NAMESPACE" --ignore-not-found 2>/dev/null
@@ -652,10 +670,12 @@ if [ -n "$KC_ROUTE" ] && [ -n "$KC_BOOTSTRAP_USER" ]; then
     # Sync to kagenti-system so oauth-secret jobs use the same admin
     KC_USER_B64=$(echo -n "admin" | base64)
     KC_PASS_B64=$(echo -n "${ADMIN_PASS}" | base64)
-    oc patch secret keycloak-admin-secret -n "$NAMESPACE" --type='json' \
-      -p="[{\"op\":\"replace\",\"path\":\"/data/KEYCLOAK_ADMIN_USERNAME\",\"value\":\"${KC_USER_B64}\"},{\"op\":\"replace\",\"path\":\"/data/KEYCLOAK_ADMIN_PASSWORD\",\"value\":\"${KC_PASS_B64}\"}]" \
-      2>/dev/null || true
-    echo "  Credentials: secret keycloak-admin ($KC_NAMESPACE) + keycloak-admin-secret ($NAMESPACE)."
+    if oc get secret keycloak-admin-secret -n "$NAMESPACE" &>/dev/null; then
+      oc patch secret keycloak-admin-secret -n "$NAMESPACE" --type='json' \
+        -p="[{\"op\":\"replace\",\"path\":\"/data/KEYCLOAK_ADMIN_USERNAME\",\"value\":\"${KC_USER_B64}\"},{\"op\":\"replace\",\"path\":\"/data/KEYCLOAK_ADMIN_PASSWORD\",\"value\":\"${KC_PASS_B64}\"}]" \
+        2>/dev/null || true
+    fi
+    echo "  Credentials: secret keycloak-admin ($KC_NAMESPACE)."
   else
     echo "  WARNING: Could not obtain Keycloak token, skipping user cleanup."
   fi
