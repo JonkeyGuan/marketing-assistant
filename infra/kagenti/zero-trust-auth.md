@@ -122,7 +122,7 @@ We tested the full AuthBridge token exchange pipeline end-to-end:
 
 **Setup:**
 
-1. MCP Gateway port changed from 8080 to 8090 — proxy-init excludes port 8080 (`OUTBOUND_PORTS_EXCLUDE`) because agents listen on 8080; port 8090 is intercepted by envoy-proxy
+1. MCP Gateway port temporarily changed from 8080 to 8090 — proxy-init excludes port 8080 (`OUTBOUND_PORTS_EXCLUDE`) because agents listen on 8080; port 8090 is intercepted by envoy-proxy. Reverted to 8080 after experiment (kagenti Helm chart hardcodes Gateway port, requiring manual patch on every install)
 2. SPIFFE trust domain fixed from `localtest.me` to actual cluster domain (`signatureVerification.spireTrustDomain` in kagenti Helm chart)
 3. Created `mcp-gateway` Keycloak client (target audience) + `mcp-gateway-aud` scope with audience mapper
 4. Assigned `mcp-gateway-aud` + `roles` scope to all agent SPIFFE clients
@@ -165,11 +165,11 @@ MCP Gateway v0.7.0 introduced `MCPGatewayExtension` which auto-creates:
 - `mcp-gateway-route` HTTPRoute → routes `/mcp` to the broker
 - EnvoyFilter → ext_proc for MCP protocol parsing and tool call routing
 
-Agents connect to the Gateway envoy (`mcp-gateway-istio.gateway-system.svc:8090/mcp`). The ext_proc router parses `tools/call` requests and routes them to the correct backend MCP server via Istio.
+Agents connect to the Gateway envoy (`mcp-gateway-istio.gateway-system.svc:8080/mcp`). The ext_proc router parses `tools/call` requests and routes them to the correct backend MCP server via Istio.
 
-**Current usage**: Agents call tools through Gateway (`mcp-gateway-istio.gateway-system.svc:8090/mcp`). MCP Inspector browses tools via broker. Agent code defaults to `localhost` for local dev; k8s.yaml overrides point to the Gateway address.
+**Current usage**: Agents call tools through Gateway (`mcp-gateway-istio.gateway-system.svc:8080/mcp`). MCP Inspector browses tools via broker. Agent code defaults to `localhost` for local dev; k8s.yaml overrides point to the Gateway address.
 
-**Port 8090 (not 8080)**: AuthBridge's proxy-init excludes port 8080 from iptables outbound redirection (`OUTBOUND_PORTS_EXCLUDE`) because agents listen on 8080. MCP Gateway uses port 8090 so that outbound traffic to the Gateway can be intercepted by envoy-proxy for future token exchange.
+**Port 8080**: MCP Gateway uses the default port 8080 (set by kagenti Helm chart). AuthBridge's proxy-init excludes port 8080 from iptables outbound redirection (`OUTBOUND_PORTS_EXCLUDE`), so outbound traffic to the Gateway bypasses envoy-proxy. This means AuthBridge token exchange cannot intercept agent-to-Gateway calls, but this is acceptable because token exchange loses `realm_access.roles` (see experiment results below).
 
 ### Agent-to-Tool Flow
 
@@ -263,34 +263,11 @@ spec:
 
 The Gateway controller discovers tools via MCP `tools/list` and federates them through the broker-router. Agents call the Gateway's MCP endpoint instead of individual tools.
 
-### Authorization (Partially Implemented)
+### Authorization
 
-AuthPolicy on mongodb-mcp's HTTPRoute validates JWT and injects `x-user-roles` header. imagegen-mcp does not have an AuthPolicy (image generation does not require per-user filtering).
+AuthPolicy on tool HTTPRoutes is **disabled**. MCP Gateway's broker connects to backend MCP servers without user JWT (it manages its own sessions). An AuthPolicy on the HTTPRoute would block the broker's tool discovery and tool calls, causing `authorization required` or `Unexpected content type` errors.
 
-```yaml
-apiVersion: kuadrant.io/v1
-kind: AuthPolicy
-metadata:
-  name: mongodb-mcp-auth
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: HTTPRoute
-    name: mongodb-mcp-route
-  rules:
-    authentication:
-      keycloak-jwt:
-        jwt:
-          issuerUrl: https://<KEYCLOAK_ROUTE>/realms/kagenti
-    response:
-      success:
-        headers:
-          x-user-roles:
-            plain:
-              expression: "auth.identity.realm_access.roles.join(',')"
-```
-
-Requires Kuadrant CR (`kuadrant.io/v1beta1`) to enable policy enforcement.
+Per-user authorization is handled at the application level by `mongodb-mcp/app/server.py` → `filter_customers_by_user_perm()`, which reads JWT claims from the original request forwarded through the broker.
 
 ### Access Control (Implemented)
 

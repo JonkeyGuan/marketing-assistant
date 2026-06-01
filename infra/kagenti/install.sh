@@ -204,11 +204,9 @@ oc annotate namespace gateway-system \
   --overwrite 2>/dev/null || true
 
 MCP_GW_CHART="oci://ghcr.io/kuadrant/charts/mcp-gateway"
-MCP_GW_PORT="${MCP_GW_PORT:-8090}"
 MCP_GW_SETS=(
   --set "image.tag=v${MCP_GW_VERSION}"
   --set "gateway.publicHost=mcp-gateway-gateway-system.${DOMAIN}"
-  --set "gateway.port=${MCP_GW_PORT}"
   --set "gateway.internalHostPattern=*.svc.cluster.local"
   --set "mcpGatewayExtension.create=true"
   --set "mcpGatewayExtension.gatewayRef.name=mcp-gateway"
@@ -325,6 +323,13 @@ oc create configmap kagenti-ui-config -n "$NAMESPACE" \
 # ---------------------------------------------------------------------------
 echo "[7/9] Applying post-install fixups..."
 
+# Fix Gateway mcps listener hostname: kagenti chart hardcodes *.mcp.local but
+# our HTTPRoutes use *.svc.cluster.local hostnames for internal MCP server routing.
+echo "  Patching Gateway mcps listener hostname..."
+oc patch gateway mcp-gateway -n gateway-system --type='json' \
+  -p='[{"op":"replace","path":"/spec/listeners/1/hostname","value":"*.svc.cluster.local"}]' \
+  2>/dev/null || true
+
 # Create Kuadrant CR (enables AuthPolicy enforcement)
 echo "  Creating Kuadrant CR..."
 oc apply -f - <<'KUADRANTEOF' 2>/dev/null || true
@@ -400,11 +405,18 @@ if [ -n "$KC_ROUTE" ] && [ -n "$INSPECTOR_HOST" ] && oc get deployment mcp-inspe
   # token adds friction without meaningful protection on top of OAuth + Keycloak.
 
   # 2. Create mcp-inspector Keycloak client
-  KC_ADMIN_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
-  KC_ADMIN_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  KC_ADMIN_USER=""
+  KC_ADMIN_PASS=""
+  if oc get secret keycloak-admin -n "$KC_NAMESPACE" &>/dev/null; then
+    KC_ADMIN_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+    KC_ADMIN_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  elif oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" &>/dev/null; then
+    KC_ADMIN_USER=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+    KC_ADMIN_PASS=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  fi
   KC_ADMIN_TOKEN=$(curl -sk -X POST "https://${KC_ROUTE}/realms/master/protocol/openid-connect/token" \
     -d "client_id=admin-cli" -d "username=${KC_ADMIN_USER}" -d "password=${KC_ADMIN_PASS}" \
-    -d "grant_type=password" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
+    -d "grant_type=password" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
 
   if [ -n "$KC_ADMIN_TOKEN" ]; then
     KC_REALM_API="https://${KC_ROUTE}/admin/realms/kagenti"
@@ -465,48 +477,12 @@ spec:
     fi
   fi
 
-  # 5. AuthPolicy on broker route (401 triggers Inspector OAuth discovery)
-  BROKER_ROUTE=$(oc get httproute mcp-gateway-route -n "$MCP_NAMESPACE" -o name 2>/dev/null)
-  if [ -n "$BROKER_ROUTE" ]; then
-    cat <<AUTHEOF | oc apply -f - 2>/dev/null
-apiVersion: kuadrant.io/v1
-kind: AuthPolicy
-metadata:
-  name: mcp-gateway-auth
-  namespace: $MCP_NAMESPACE
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: HTTPRoute
-    name: mcp-gateway-route
-  rules:
-    authentication:
-      keycloak-jwt:
-        jwt:
-          issuerUrl: https://${KC_ROUTE}/realms/kagenti
-        when:
-        - predicate: "request.method != 'OPTIONS'"
-        - predicate: "!request.path.contains('/.well-known')"
-      anonymous-preflight:
-        anonymous: {}
-        when:
-        - predicate: "request.method == 'OPTIONS'"
-      anonymous-wellknown:
-        anonymous: {}
-        when:
-        - predicate: "request.path.contains('/.well-known')"
-    response:
-      success:
-        headers:
-          x-user-roles:
-            plain:
-              expression: "auth.identity.realm_access.roles.join(',')"
-            when:
-            - predicate: "request.method != 'OPTIONS'"
-            - predicate: "!request.path.contains('/.well-known')"
-AUTHEOF
-    echo "    Created broker AuthPolicy"
-  fi
+  # 5. AuthPolicy on broker route — DISABLED
+  # MCP streamable-http uses GET for SSE streams. fastmcp Client may not
+  # send Authorization header on GET requests, causing 401 with empty
+  # content-type → "Unexpected content type" error. JWT auth is enforced
+  # at the tool level (per-HTTPRoute AuthPolicy) instead of at the broker.
+  # oauthProtectedResource (step 4) still enables Inspector OAuth discovery.
 else
   echo "    skipped (Inspector or Keycloak not available)"
 fi

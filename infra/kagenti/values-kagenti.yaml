@@ -68,6 +68,8 @@ mcpGateway:
 mlflow:
   auth:
     enabled: true
+  dashboard:
+    routePath: ""
 
 # ---------------------------------------------------------------------------
 # Agent OAuth — SPIFFE prefix set at install time via --set

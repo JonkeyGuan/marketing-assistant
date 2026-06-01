@@ -144,27 +144,6 @@ spec:
     name: mongodb-mcp-route
   path: /mcp
 ---
-apiVersion: kuadrant.io/v1
-kind: AuthPolicy
-metadata:
-  name: mongodb-mcp-auth
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: HTTPRoute
-    name: mongodb-mcp-route
-  rules:
-    authentication:
-      keycloak-jwt:
-        jwt:
-          issuerUrl: <TODO_KC_ISSUER>
-    response:
-      success:
-        headers:
-          x-user-roles:
-            plain:
-              expression: "auth.identity.realm_access.roles.join(',')"
----
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:

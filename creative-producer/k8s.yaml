@@ -8,7 +8,7 @@ data:
   PORT: "8086"
   AGENT_ENDPOINT: "http://creative-producer:8086"
   EVENT_HUB_URL: "http://event-hub:8080"
-  IMAGEGEN_MCP_URL: "http://mcp-gateway-istio.gateway-system.svc:8090"
+  IMAGEGEN_MCP_URL: "http://mcp-gateway-istio.gateway-system.svc:8080"
   CAMPAIGN_API_URL: "http://campaign-api:8089"
   CONFIG_SERVICE_URL: "http://config-service:8081"
   LOG_LEVEL: "INFO"

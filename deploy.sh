@@ -159,8 +159,17 @@ fi
 echo "[3/4] Configuring Keycloak SSO..."
 
 KC_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
-KC_ADMIN_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
-KC_ADMIN_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+KC_ADMIN_USER=""
+KC_ADMIN_PASS=""
+if oc get secret keycloak-admin -n "$KC_NAMESPACE" &>/dev/null; then
+  KC_ADMIN_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_ADMIN_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+fi
+if [ -z "$KC_ADMIN_USER" ] && oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" &>/dev/null; then
+  KC_ADMIN_USER=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_ADMIN_PASS=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+  echo "  Using keycloak-initial-admin (keycloak-admin secret not found — install.sh Phase 8 may not have completed)."
+fi
 
 if [ -z "$KC_ROUTE" ] || [ -z "$KC_ADMIN_USER" ]; then
   echo "  WARNING: Keycloak not found, skipping SSO configuration."
