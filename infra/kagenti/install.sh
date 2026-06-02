@@ -413,10 +413,10 @@ if [ -n "$KC_ROUTE" ] && [ -n "$KC_ADMIN_USER" ]; then
     -d "grant_type=password" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
   if [ -n "$KC_SUB_TOKEN" ]; then
     OPENID_SCOPE_ID=$(curl -sk -H "Authorization: Bearer ${KC_SUB_TOKEN}" \
-      "https://${KC_ROUTE}/admin/realms/${KC_REALM}/client-scopes" | \
+      "https://${KC_ROUTE}/admin/realms/kagenti/client-scopes" | \
       python3 -c "import sys,json; [print(s['id']) for s in json.load(sys.stdin) if s['name']=='openid']" 2>/dev/null)
     if [ -n "$OPENID_SCOPE_ID" ]; then
-      curl -sk -X POST "https://${KC_ROUTE}/admin/realms/${KC_REALM}/client-scopes/${OPENID_SCOPE_ID}/protocol-mappers/models" \
+      curl -sk -X POST "https://${KC_ROUTE}/admin/realms/kagenti/client-scopes/${OPENID_SCOPE_ID}/protocol-mappers/models" \
         -H "Authorization: Bearer ${KC_SUB_TOKEN}" -H "Content-Type: application/json" \
         -d '{"name":"sub","protocol":"openid-connect","protocolMapper":"oidc-sub-mapper","config":{"introspection.token.claim":"true","access.token.claim":"true"}}' \
         2>/dev/null
