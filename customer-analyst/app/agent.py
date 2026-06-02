@@ -1,6 +1,7 @@
 import json
 import logging
 from contextlib import nullcontext
+from contextvars import ContextVar
 
 import httpx
 import mlflow
@@ -8,6 +9,8 @@ from mlflow.entities import SpanType
 from openai import AsyncOpenAI
 
 from app.schemas import CustomerProfile, GetTargetCustomersOutput
+
+_auth_header: ContextVar[str] = ContextVar("_auth_header", default="")
 from app.settings import settings
 from app.vertical_config import prompt as vcfg_prompt, seed_data
 

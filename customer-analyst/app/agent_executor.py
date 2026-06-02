@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import traceback
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -8,7 +7,7 @@ from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Task, TaskState, TaskStatus, Part
 
-from app.agent import CustomerAnalystAgent
+from app.agent import CustomerAnalystAgent, _auth_header
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +47,9 @@ class CustomerAnalystExecutor(AgentExecutor):
             agent_headers = get_a2a_agent_headers(context)
 
             auth_headers = {}
-            mongodb_token = os.environ.get("MONGODB_TOKEN", "")
-            if mongodb_token:
-                auth_headers["Authorization"] = f"Bearer {mongodb_token}"
-            elif agent_headers.get("authorization"):
-                auth_headers["Authorization"] = agent_headers["authorization"]
+            auth = _auth_header.get("")
+            if auth:
+                auth_headers["Authorization"] = auth
             self.agent.headers = auth_headers
 
             result = await self.agent.get_customers(params, agent_headers)

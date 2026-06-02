@@ -23,6 +23,55 @@ if ! oc whoami &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
+# Gate: wait for ztunnel to be fully ready
+# ---------------------------------------------------------------------------
+ZTUNNEL_NS="istio-system"
+if ! oc get daemonset ztunnel -n "$ZTUNNEL_NS" &>/dev/null; then
+  ZTUNNEL_NS="istio-ztunnel"
+fi
+
+echo "--- Waiting for ztunnel ---"
+for i in $(seq 1 30); do
+  DESIRED=$(oc get daemonset ztunnel -n "$ZTUNNEL_NS" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null)
+  READY=$(oc get daemonset ztunnel -n "$ZTUNNEL_NS" -o jsonpath='{.status.numberReady}' 2>/dev/null)
+  if [ -n "$DESIRED" ] && [ -n "$READY" ] && [ "$DESIRED" = "$READY" ]; then
+    echo "  ztunnel ready ($READY/$DESIRED)"
+    break
+  fi
+  echo "  ztunnel not ready ($READY/$DESIRED) — waiting 10s ($i/30)..."
+  sleep 10
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# Restart pods stuck in Init:CrashLoopBackOff (proxy-init iptables failure)
+# ---------------------------------------------------------------------------
+restart_crashed_inits() {
+  local ns="$1"
+  local crashed
+  crashed=$(oc get pods -n "$ns" --no-headers 2>/dev/null | grep -E "Init:CrashLoopBackOff|Init:Error" | awk '{print $1}')
+  if [ -n "$crashed" ]; then
+    echo "  Found Init-crashed pods, restarting their owners..."
+    for pod in $crashed; do
+      local owner
+      owner=$(oc get pod "$pod" -n "$ns" -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}' 2>/dev/null)
+      local kind="${owner%%/*}"
+      local name="${owner##*/}"
+      if [ "$kind" = "ReplicaSet" ]; then
+        local dep
+        dep=$(oc get rs "$name" -n "$ns" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)
+        if [ -n "$dep" ]; then
+          echo "    Restarting deployment/$dep (proxy-init crash)..."
+          oc rollout restart "deployment/$dep" -n "$ns" 2>/dev/null || true
+        fi
+      fi
+    done
+    echo "  Waiting 30s for init containers..."
+    sleep 30
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Detect and restart pods missing ztunnel
 # ---------------------------------------------------------------------------
 reconcile_namespace() {
@@ -136,13 +185,27 @@ reconcile_namespace() {
   echo ""
 }
 
+restart_crashed_inits "$PLATFORM_NS"
+restart_crashed_inits "$APP_NS"
+
 reconcile_namespace "$PLATFORM_NS"
 reconcile_namespace "$APP_NS"
 
 # ---------------------------------------------------------------------------
-# Restart MCP Gateway broker (reconnect to tools after ztunnel reset)
+# Restart Gateway envoy + MCP Gateway broker (reconnect after ztunnel reset)
 # ---------------------------------------------------------------------------
+GW_NS="gateway-system"
 MCP_NS="mcp-system"
+
+echo "--- Gateway System ---"
+if oc get deployment mcp-gateway-istio -n "$GW_NS" &>/dev/null; then
+  echo "  Restarting mcp-gateway-istio (Gateway envoy)..."
+  oc rollout restart deployment/mcp-gateway-istio -n "$GW_NS" 2>/dev/null || true
+  oc rollout status deployment/mcp-gateway-istio -n "$GW_NS" --timeout="${TIMEOUT}s" 2>/dev/null || \
+    echo "  WARNING: mcp-gateway-istio did not become ready within ${TIMEOUT}s"
+fi
+echo ""
+
 echo "--- MCP Gateway ---"
 if oc get deployment mcp-gateway -n "$MCP_NS" &>/dev/null; then
   echo "  Restarting mcp-gateway broker..."

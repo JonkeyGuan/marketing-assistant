@@ -69,7 +69,10 @@ spec:
             - |
               set -uo pipefail
 
-              ZTUNNEL_NS="istio-ztunnel"
+              ZTUNNEL_NS="istio-system"
+              if ! kubectl get daemonset ztunnel -n "$ZTUNNEL_NS" &>/dev/null; then
+                ZTUNNEL_NS="istio-ztunnel"
+              fi
               NAMESPACES="kagenti-system marketing"
               PORT_HEX="3AA0"
 
@@ -86,6 +89,24 @@ spec:
               echo "ztunnel ready ($READY/$DESIRED)"
 
               ACTED=false
+
+              # --- Restart pods stuck in Init:CrashLoopBackOff (proxy-init iptables failure) ---
+              for NS in $NAMESPACES; do
+                CRASHED=$(kubectl get pods -n "$NS" --no-headers 2>/dev/null | grep -E "Init:CrashLoopBackOff|Init:Error" | awk '{print $1}')
+                for POD in $CRASHED; do
+                  OWNER=$(kubectl get pod "$POD" -n "$NS" -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}' 2>/dev/null)
+                  KIND="${OWNER%%/*}"
+                  NAME="${OWNER##*/}"
+                  if [ "$KIND" = "ReplicaSet" ]; then
+                    DEP=$(kubectl get rs "$NAME" -n "$NS" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)
+                    if [ -n "$DEP" ]; then
+                      echo "[$NS] restarting deployment/$DEP (init crash)"
+                      kubectl rollout restart "deployment/$DEP" -n "$NS"
+                      ACTED=true
+                    fi
+                  fi
+                done
+              done
 
               for NS in $NAMESPACES; do
                 if ! kubectl get namespace "$NS" &>/dev/null; then
@@ -134,7 +155,18 @@ spec:
                 done
               done
 
+              # --- Restart Gateway envoy + MCP broker if any pods were restarted ---
               if [ "$ACTED" = "true" ]; then
+                GW_NS="gateway-system"
+                MCP_NS="mcp-system"
+                if kubectl get deployment mcp-gateway-istio -n "$GW_NS" &>/dev/null; then
+                  echo "[$GW_NS] restarting mcp-gateway-istio"
+                  kubectl rollout restart deployment/mcp-gateway-istio -n "$GW_NS"
+                fi
+                if kubectl get deployment mcp-gateway -n "$MCP_NS" &>/dev/null; then
+                  echo "[$MCP_NS] restarting mcp-gateway"
+                  kubectl rollout restart deployment/mcp-gateway -n "$MCP_NS"
+                fi
                 echo "reconciliation triggered"
               else
                 echo "all ambient pods healthy — no action needed"

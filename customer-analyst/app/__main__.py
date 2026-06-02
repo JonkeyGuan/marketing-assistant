@@ -7,10 +7,13 @@ from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.types import AgentCard, AgentSkill, AgentCapabilities, AgentInterface
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Route
 from starlette.responses import JSONResponse
 
 from app.settings import settings
+from app.agent import _auth_header
 from app.agent_executor import CustomerAnalystExecutor
 from app.tracing import setup_telemetry, TraceContextMiddleware
 
@@ -60,6 +63,15 @@ async def health_check(request):
     return JSONResponse({"status": "healthy", "agent": "Customer Analyst"})
 
 
+class AuthCapture(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        token = _auth_header.set(request.headers.get("Authorization", ""))
+        try:
+            return await call_next(request)
+        finally:
+            _auth_header.reset(token)
+
+
 app = Starlette(
     routes=[
         Route("/healthz", health_check, methods=["GET"]),
@@ -67,7 +79,7 @@ app = Starlette(
         *create_agent_card_routes(agent_card),
         *create_jsonrpc_routes(handler, rpc_url="/", enable_v0_3_compat=True),
     ],
-    middleware=[],
+    middleware=[Middleware(AuthCapture)],
 )
 app.add_middleware(TraceContextMiddleware)
 

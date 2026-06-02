@@ -393,6 +393,38 @@ fi
 # 3. Enable Anonymous DCR on Keycloak (Inspector discovers client via OAuth flow)
 # 4. Configure oauthProtectedResource on MCPGatewayExtension
 # 5. Add AuthPolicy on broker route (returns 401 to trigger OAuth discovery)
+# Add 'sub' mapper to 'openid' client scope (required by MCP Gateway Router for
+# user identity extraction when urlElicitation is enabled). Keycloak 26+ doesn't
+# include 'sub' in access tokens by default without the 'basic' scope.
+echo "  Adding 'sub' mapper to openid scope..."
+KC_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
+KC_ADMIN_USER=""
+KC_ADMIN_PASS=""
+if oc get secret keycloak-admin -n "$KC_NAMESPACE" &>/dev/null; then
+  KC_ADMIN_USER=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_ADMIN_PASS=$(oc get secret keycloak-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+elif oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" &>/dev/null; then
+  KC_ADMIN_USER=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
+  KC_ADMIN_PASS=$(oc get secret keycloak-initial-admin -n "$KC_NAMESPACE" -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
+fi
+if [ -n "$KC_ROUTE" ] && [ -n "$KC_ADMIN_USER" ]; then
+  KC_SUB_TOKEN=$(curl -sk -X POST "https://${KC_ROUTE}/realms/master/protocol/openid-connect/token" \
+    -d "client_id=admin-cli" -d "username=${KC_ADMIN_USER}" -d "password=${KC_ADMIN_PASS}" \
+    -d "grant_type=password" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+  if [ -n "$KC_SUB_TOKEN" ]; then
+    OPENID_SCOPE_ID=$(curl -sk -H "Authorization: Bearer ${KC_SUB_TOKEN}" \
+      "https://${KC_ROUTE}/admin/realms/${KC_REALM}/client-scopes" | \
+      python3 -c "import sys,json; [print(s['id']) for s in json.load(sys.stdin) if s['name']=='openid']" 2>/dev/null)
+    if [ -n "$OPENID_SCOPE_ID" ]; then
+      curl -sk -X POST "https://${KC_ROUTE}/admin/realms/${KC_REALM}/client-scopes/${OPENID_SCOPE_ID}/protocol-mappers/models" \
+        -H "Authorization: Bearer ${KC_SUB_TOKEN}" -H "Content-Type: application/json" \
+        -d '{"name":"sub","protocol":"openid-connect","protocolMapper":"oidc-sub-mapper","config":{"introspection.token.claim":"true","access.token.claim":"true"}}' \
+        2>/dev/null
+      echo "    done"
+    fi
+  fi
+fi
+
 echo "  Configuring MCP Inspector OAuth..."
 KC_ROUTE=$(oc get route keycloak -n "$KC_NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
 INSPECTOR_HOST=$(oc get route mcp-inspector -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
@@ -462,6 +494,7 @@ for p in json.load(sys.stdin):
     if [ -n "$MCPGWE_NAME" ]; then
       oc patch "$MCPGWE_NAME" -n "$MCP_NAMESPACE" --type merge -p "
 spec:
+  urlElicitation: Enabled
   oauthProtectedResource:
     resourceName: MCP Gateway
     resource: https://${MCP_GW_ROUTE}/mcp
@@ -473,16 +506,15 @@ spec:
       - openid
       - profile
       - email
-" 2>/dev/null && echo "    Configured oauthProtectedResource"
+" 2>/dev/null && echo "    Configured oauthProtectedResource + urlElicitation"
     fi
   fi
 
   # 5. AuthPolicy on broker route — DISABLED
-  # MCP streamable-http uses GET for SSE streams. fastmcp Client may not
-  # send Authorization header on GET requests, causing 401 with empty
-  # content-type → "Unexpected content type" error. JWT auth is enforced
-  # at the tool level (per-HTTPRoute AuthPolicy) instead of at the broker.
-  # oauthProtectedResource (step 4) still enables Inspector OAuth discovery.
+  # MCP streamable-http GET requests may not carry JWT → 401 → "Unexpected content type".
+  # Per-user JWT auth is handled by urlElicitation: Router reads Authorization header from
+  # the original request and forwards it to backend tools when urlElicitation is Enabled
+  # (without tokenURLElicitation on MCPServerRegistrations, Router transparently passes JWT).
 else
   echo "    skipped (Inspector or Keycloak not available)"
 fi

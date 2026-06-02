@@ -174,18 +174,29 @@ Agents connect to the Gateway envoy (`mcp-gateway-istio.gateway-system.svc:8080/
 ### Agent-to-Tool Flow
 
 ```
-Agent → (JWT passthrough) → MCP Gateway → Tool
-                               ↓
-                        1. Validate JWT (roles intact)
-                        2. Tool-level ACL (CEL expressions)
-                        3. Inject x-user-roles header
-                        4. Forward to tool backend
+Agent ──(JWT in Authorization header)──→ MCP Gateway envoy
+  → ext_proc Router (processes MCP routing)
+    → Gateway envoy preserves original Authorization header
+      → mongodb-mcp (parses JWT, filters by realm_access.roles)
 ```
 
-Advantages over authproxy-routes:
-- No token exchange needed → roles preserved
-- Tool-level ACL via `resource_access` JWT claim
-- Header injection for downstream data filtering
+How JWT reaches the backend tool:
+
+1. User JWT propagates through A2A chain: Frontend → Campaign API → Campaign Director → Customer Analyst
+2. Customer Analyst's `AuthCapture` middleware captures JWT from HTTP request into ContextVar
+3. `agent_executor.py` reads ContextVar → passes to `call_mcp_tool(auth_headers=...)`
+4. `call_mcp_tool` extracts Bearer token → passes as `auth=token` to fastmcp Client
+5. fastmcp sends `Authorization: Bearer <JWT>` on every POST to Gateway
+6. Gateway envoy ext_proc Router processes routing (authority, path, session ID) but does NOT strip the Authorization header
+7. Gateway envoy forwards request to mongodb-mcp with original Authorization preserved
+8. mongodb-mcp parses JWT and applies per-user filtering
+
+Key insight: The Authorization header survives through Gateway ext_proc because Envoy's `HeaderMutation` only modifies explicitly set/removed headers — unmentioned headers are preserved from the original request.
+
+Requirements:
+- `AuthCapture` middleware on Customer Analyst (captures JWT from A2A HTTP request)
+- `sub` claim present in JWT (openid scope with sub mapper for Keycloak 26+)
+- Agent code must pass JWT (fastmcp `auth=token` parameter)
 - Istio AuthorizationPolicy restricts direct tool access (only Gateway namespaces allowed)
 
 ### Installation
@@ -263,11 +274,65 @@ spec:
 
 The Gateway controller discovers tools via MCP `tools/list` and federates them through the broker-router. Agents call the Gateway's MCP endpoint instead of individual tools.
 
-### Authorization
+### Authorization (via urlElicitation)
 
-AuthPolicy on tool HTTPRoutes is **disabled**. MCP Gateway's broker connects to backend MCP servers without user JWT (it manages its own sessions). An AuthPolicy on the HTTPRoute would block the broker's tool discovery and tool calls, causing `authorization required` or `Unexpected content type` errors.
+AuthPolicy on tool HTTPRoutes is **not used**. MCP Gateway's broker connects to backend tools via its own Router (ext_proc on gRPC :50051), which by default creates new sessions **without forwarding the original user JWT**. We solved this using the `urlElicitation` mechanism.
 
-Per-user authorization is handled at the application level by `mongodb-mcp/app/server.py` → `filter_customers_by_user_perm()`, which reads JWT claims from the original request forwarded through the broker.
+#### The Problem: Router Cuts JWT Chain
+
+```
+Agent ──(JWT)──→ Gateway envoy → Router (ext_proc)
+                                    │
+                        Router creates new session (NO JWT by default)
+                                    │
+                                    ▼
+                              mongodb-mcp → No user identity → No filtering
+```
+
+The Router (`mcp-gateway` pod in mcp-system) runs both a Broker (HTTP :8080) and a Router (gRPC :50051). When routing `tools/call` requests, it creates fresh HTTP connections to backend tools without propagating the original `Authorization` header.
+
+AuthPolicy on tool HTTPRoutes blocks the Router (it has no JWT), and AuthPolicy on the broker route breaks MCP streamable-http (SSE GET requests don't carry JWT → 401 with empty content-type → `Unexpected content type` error in fastmcp Client).
+
+#### The Solution: AuthCapture + ext_proc Header Preservation (Verified 2026-06-02)
+
+The original problem was that mongodb-mcp never received the user's JWT. Root cause analysis traced the break to **Customer Analyst**, not MCP Gateway.
+
+**Root cause**: Customer Analyst's `TraceContextMiddleware` only captured `traceparent`/`tracestate` headers, ignoring `authorization`. The JWT from Campaign Director's A2A call was present in the HTTP request but never extracted by the agent code.
+
+**Fix**: Added `AuthCapture` middleware (`customer-analyst/app/auth.py`) that captures the Authorization header into a ContextVar, matching Campaign Director's existing pattern. The JWT then flows: ContextVar → `agent_executor.py` → `call_mcp_tool(auth_headers=...)` → fastmcp Client `auth=token`.
+
+**How JWT survives through MCP Gateway**: Envoy ext_proc uses `HeaderMutation` to modify routing headers (authority, path, session ID). Headers not explicitly set or removed are preserved from the original request. The Router does NOT remove the `authorization` header — only `x-mcp-authorized` and `x-mcp-virtualserver` are stripped as internal headers.
+
+**MCP Gateway Router source code** (`internal/mcp-router/request_handlers.go`) has additional JWT handling paths that are NOT used in our setup:
+
+- `initializeMCPSeverSession`: forwards headers via `passThroughHeaders` during session creation (hairpin request)
+- `tokenURLElicitation`: injects cached user token on every `tools/call` — only when `tokenURLElicitation` is configured on MCPServerRegistration (we don't configure it because fastmcp Client doesn't support the `-32042` elicitation protocol)
+
+**Verified result (2026-06-02)**:
+
+```
+# bob (no platinum-access) — get_all_vip_customers
+Total: 4 | Tiers: gold(3), diamond(1) | Platinum: 0
+
+# alice (has platinum-access) — get_all_vip_customers
+Total: 8 | Tiers: platinum(4), gold(3), diamond(1)
+```
+
+mongodb-mcp logs:
+```
+bob lacks 'platinum-access' role/scope — filtering out platinum members
+alice has 'platinum-access' role (realm_access) — full access
+```
+
+#### Key Findings
+
+- **JWT break was at Customer Analyst, not MCP Gateway**: The A2A HTTP request carried the Authorization header, but `TraceContextMiddleware` didn't capture it. Fix: dedicated `AuthCapture` middleware
+- **ext_proc preserves original Authorization**: Gateway envoy's ext_proc only modifies routing headers — the original `authorization` header passes through to the backend unchanged
+- **Campaign API has its own role check**: `_check_role_audience_restriction()` rejects platinum-targeting campaigns for users without `platinum-access` at the API level — a separate protection layer from mongodb-mcp's data filtering
+- **ALLOW_JWT_FALLBACK=false blocks Inspector/kagenti UI**: These paths don't carry user JWT, so `false` returns "Access denied". Set `true` for debugging, `false` for production
+- **kagenti UI and MCP Inspector** do not pass user JWT to MCP Gateway — per-user filtering only works through the agent code path (fastmcp Client with `auth=token`)
+
+Per-user authorization is handled by `mongodb-mcp/app/server.py` → `filter_customers_by_user_perm()`, which reads JWT `realm_access.roles` from the forwarded Authorization header. Alice (has `platinum-access`) sees all customers; Bob (no `platinum-access`) has platinum customers filtered out.
 
 ### Access Control (Implemented)
 
@@ -293,9 +358,12 @@ Kubernetes NetworkPolicy is NOT used — Istio ambient mesh ztunnel interferes w
 
 ### JWT Fallback Switch
 
-mongodb-mcp has an `ALLOW_JWT_FALLBACK` setting (default `false`):
-- `false` (production): requires `x-user-roles` header from Gateway AuthPolicy; rejects requests without it
-- `true` (local dev): falls back to parsing JWT from Authorization header (unverified signature)
+mongodb-mcp has an `ALLOW_JWT_FALLBACK` setting (default `false` in code, configured via k8s.yaml):
+
+- `false` (production): when no JWT is present (e.g. calls from MCP Inspector, kagenti UI Tool Catalog), returns `Access denied: missing authorization headers`. Secure but blocks admin tool debugging.
+- `true` (current): falls back to parsing JWT from Authorization header. When no JWT at all, returns unfiltered data — **insecure for production**, allows unauthenticated access to all data through Gateway broker.
+
+**Note**: The deployed mongodb-mcp image must include the `ALLOW_JWT_FALLBACK` field in `settings.py`. Older images without this field ignore the env var and always return unfiltered data when no JWT is present.
 
 ### MCP Inspector
 
@@ -305,9 +373,9 @@ Inspector v0.21.1 supports native MCP OAuth (Guided OAuth Flow + PKCE). install.
 2. `mcp-inspector` Keycloak client (public, PKCE) — pre-registered to skip DCR
 3. Anonymous DCR enabled on Keycloak — removes trusted-hosts policy
 4. `oauthProtectedResource` on MCPGatewayExtension — broker serves `/.well-known/oauth-protected-resource`
-5. AuthPolicy on broker route — returns 401 to trigger OAuth discovery
+5. AuthPolicy on broker route — **disabled** (MCP streamable-http GET requests don't carry JWT, causing empty content-type 401 responses)
 
-Security is enforced by MCP Gateway AuthPolicy (JWT required for all tool calls). The proxy session token adds friction without meaningful protection on top of OAuth + Keycloak.
+**Note**: MCP Inspector and kagenti UI Tool Catalog connect to MCP Gateway without user JWT. Per-user filtering does not apply through these paths — they return unfiltered data (or Access denied if `ALLOW_JWT_FALLBACK=false`).
 
 Setup (one-time, localStorage remembers):
 
@@ -370,6 +438,22 @@ JWT passthrough + application-level `filter_customers_by_user_perm()` is the pra
 3. A permission intersection engine (OPA or similar) is integrated into the platform
 
 Until then, JWT passthrough preserves user identity and roles at every hop, which is the approach used by kagenti's own demos and documentation.
+
+## Operational: Cluster Reboot Recovery
+
+Istio ambient mesh uses ztunnel (DaemonSet) with in-pod traffic redirection. After cluster/node reboot, CRI-O restores pod sandboxes without re-invoking the CNI plugin chain, so ztunnel's in-pod sockets (ports 15001/15006/15008) are lost. This is a [known upstream issue](https://github.com/istio/istio/issues/57285).
+
+**Symptoms**: `connection reset by peer`, `connection refused`, 503/504 across namespaces, `proxy-init` `Init:CrashLoopBackOff` (iptables kernel module not loaded yet).
+
+**Recovery**: Run `./post-reboot.sh` which:
+1. Waits for ztunnel DaemonSet to be fully Ready
+2. Restarts pods stuck in `Init:CrashLoopBackOff` (proxy-init iptables failure)
+3. Detects pods missing ztunnel socket via `/proc/net/tcp` and restarts their owners
+4. Restarts Gateway envoy (`gateway-system`) and MCP Gateway broker (`mcp-system`)
+
+**Automated recovery**: `infra/kagenti/ambient-reconciler.yaml` is a CronJob (every 3 min) that performs the same ztunnel socket detection and pod restart. Deploy with `oc apply -f infra/kagenti/ambient-reconciler.yaml`.
+
+**AuthBridge mode**: We use `envoy-sidecar` (iptables-based, advanced). Kagenti default is `proxy-sidecar` (HTTP_PROXY-based). The HBONE breakage is a ztunnel issue unrelated to AuthBridge mode — pods without AuthBridge are equally affected.
 
 ## References
 
